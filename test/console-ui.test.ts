@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { FakeAgent } from "./support/fake-agent.ts";
+import { FakeAgent, Gate } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform, type TestPlatformOptions } from "./support/harness.ts";
 
 describe("Console UI", () => {
@@ -117,6 +117,69 @@ describe("Console UI", () => {
     await join({ page });
     await page.getByLabel("Prompt").fill("three");
     await expect.poll(() => page.getByRole("button", { name: "Send" }).isDisabled(), { timeout: 10_000 }).toBe(true);
+  });
+
+  it("tells the Player why their Prompt didn't Land when the Canvas didn't render", async () => {
+    const { page, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("index.html", "<body></body>"));
+
+    await page.getByLabel("Prompt").fill("blank it");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    await expect.poll(() => page.locator("#status").textContent(), { timeout: 10_000 }).toContain("Canvas didn't render");
+  });
+
+  it("shows the live queue, the Run in progress with its progress, and each Run's outcome with its reason", async () => {
+    const { page, platform, agent } = await join(await open());
+    const gate = new Gate();
+    agent.enqueue(
+      async (run) => {
+        await run.writeFile("features/snow/snow.js", "snow");
+        await gate.wait();
+      },
+      () => {
+        throw new Error("Claude gave up");
+      },
+    );
+    const queue = page.getByTestId("queue");
+    const runs = page.getByTestId("runs");
+
+    await page.getByLabel("Prompt").fill("make it snow");
+    await page.getByRole("button", { name: "Send" }).click();
+    const snow = runs.locator("li", { hasText: "make it snow" });
+    await expect.poll(() => snow.textContent(), { timeout: 10_000 }).toContain("features/snow/snow.js");
+    expect(await snow.textContent()).toContain("Alice");
+    expect(await snow.textContent()).toMatch(/running/i);
+
+    await platform.sendPrompt({ nickname: "Bob", prompt: "make it rain" });
+    await expect.poll(() => queue.textContent()).toContain("make it rain");
+    expect(await queue.textContent()).toContain("Bob");
+
+    gate.release();
+    await expect.poll(() => snow.textContent(), { timeout: 10_000 }).toMatch(/landed/i);
+    await expect.poll(() => queue.locator("li").count()).toBe(0);
+    const rain = runs.locator("li", { hasText: "make it rain" });
+    await expect.poll(() => rain.textContent(), { timeout: 10_000 }).toMatch(/rejected/i);
+    expect(await rain.textContent()).toContain("Claude gave up");
+  });
+
+  it("tells the Player they already have a Prompt waiting", async () => {
+    const { page, platform, agent } = await join(await open());
+    const gate = new Gate();
+    agent.enqueue(async (run) => {
+      await gate.wait();
+      await run.writeFile("index.html", "x");
+    });
+    await platform.sendPrompt({ nickname: "Bob", prompt: "first" });
+    await agent.started(1);
+
+    await page.getByLabel("Prompt").fill("second");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect.poll(() => page.getByTestId("queue").textContent()).toContain("second");
+    await page.getByLabel("Prompt").fill("third");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect.poll(() => page.getByRole("status").textContent()).toMatch(/already have a Prompt waiting/);
+    gate.release();
   });
 });
 

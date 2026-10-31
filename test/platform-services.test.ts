@@ -144,6 +144,27 @@ describe("Platform services over HTTP", () => {
     expect((await restarted.fetchCanvas("/__platform/store/other/title")).status).toBe(404);
   });
 
+  it("doesn't let the render check of a change touch the features' real data", async () => {
+    const { platform, agent } = await start();
+    expect((await put(platform, "/__platform/store/visits/count", 41)).status).toBe(204);
+    agent.enqueue((run) =>
+      run.writeFile(
+        "index.html",
+        `<!doctype html><html><head><title>Visits</title></head><body><h1>Visits</h1><script type="module">
+          import { store } from "/__platform/services.js";
+          const db = store("visits");
+          await db.set("count", ((await db.get("count")) ?? 0) + 1);
+          await db.set("checked", true);
+        </script></body></html>`,
+      ),
+    );
+    const run = await platform.waitForRun((await platform.sendPrompt({ nickname: "Alice", prompt: "count visits" })).id);
+    expect(run.state).toBe("landed");
+
+    expect(await (await platform.fetchCanvas("/__platform/store/visits/count")).json()).toEqual({ value: 41 });
+    expect((await platform.fetchCanvas("/__platform/store/visits/checked")).status).toBe(404);
+  });
+
   it("keeps feature messages and platform events apart on the Canvas event stream", async () => {
     const { platform, agent } = await start();
     const stream = await openEventStream(platform);
