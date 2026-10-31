@@ -36,7 +36,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 ## Canvas serving and live reload
 
 - **Canvas pages are served at `/@<commit>/<path>`** (ticket 04). A live URL redirects (302) to the same page at `main`'s commit, so relative URLs resolve inside that commit. Commit-pinned non-HTML files are cached as immutable; HTML and live URLs are `no-cache`. Only full 40-hex commits are accepted. Absolute URLs aren't pinned, so the Canvas `CLAUDE.md` tells Claude to use relative URLs. Chosen over `<base href>`, which breaks `#anchor` links; the commit shows in the address bar.
-- **Any commit in the object store can be served, including unlanded Run commits git hasn't cleaned up yet** (ticket 04). Accepted for now.
+- **The live Canvas serves a pinned commit only if it's on `main` (`repo.isOnMain`); others get 404** (code review, replacing ticket 04's "any commit"). Commits found on `main` are cached for the server's lifetime, which relies on `main` only moving forward. The render check's private server passes `anyCommit: true` to serve the candidate.
 - **`/__platform/` belongs to the platform and Canvas files there are never served** (ticket 04). It holds `platform.js` and `events`; ticket 11's client library and endpoints go under it too.
 - **The platform script is injected into every `.html` file** (ticket 04): right after `<head …>`, otherwise after the doctype, otherwise at the start. Its UI sits in an open shadow root (`<platform-overlay>`), so Canvas CSS can't touch it.
 - **The Canvas real-time channel is Server-Sent Events at `GET /__platform/events`** (ticket 04). Platform events use the SSE event name `platform`: `hello {commit, running}` first on each connection (late viewers get banners; an old page reloads), then `run-started`, `landed` and `rejected`. Ticket 11 should use its own event name and send viewer→server messages by POST under `/__platform/`, guarded by `isCrossOrigin()`.
@@ -70,10 +70,10 @@ Newest entries at the bottom. Each entry notes where it came from.
 ## Replay
 
 - **`POST /api/replays` with `{commit, model?}` and the nickname cookie** (ticket 10) answers 202 with the Run, or 400 (no nickname or bad model), 404 (commit isn't a change on `main`, including the starter Canvas; reason `not-found`), 409 (`already-waiting`) or 503 (paused). Harness: `platform.replay({nickname, commit, model?})`.
-- **Change kinds are listed in `CHANGE_KINDS` in `canvas-repository.ts`** (ticket 10); `history()` and `changesBetween()` list only those kinds. Rollback adds `"Rollback"` there.
+- **Change kinds are listed in `CHANGE_KINDS` in `canvas-repository.ts`, and each kind's behaviour is in `CHANGE_KIND_RULES` in `src/change-kinds.ts`** (ticket 10; code review): `playerPicksModel`, an optional `mechanically` step with its "nothing to do" message, `instructions(repo, worktree, run)` and `intent(run)`. A new kind needs an entry in both. `history()` and `changesBetween()` list only listed kinds.
 - **The reference to the original is two trailers, `Original: <sha>` and `Original-Nickname: <nick>`**, read back as `LandedChange.original = {commit, nickname}` (ticket 10). The nickname is stored so the credit needs no lookup. Rollback reuses the same field.
 - **`RunView` has optional `kind` (absent means Prompt) and `original`, both saved by `RunStore`** (ticket 10). For a Replay, `run.prompt` is the original Prompt and `run.nickname` is the Player who replayed it.
-- **Replay instructions are built each time work starts** (ticket 10, `Runs.instructions(run, worktree)` → `replayInstructions()` in `src/replay.ts`). Later Prompts come from `changesBetween(original, worktree.base)`, so a Replay that waited or restarted gets the current list. The diff is cut at 40,000 characters (`MAX_REPLAY_DIFF_LENGTH`). Conflict resolution uses `run.prompt`, the original Prompt.
+- **Replay instructions are built each time work starts** (ticket 10, `CHANGE_KIND_RULES.Replay.instructions` → `replayInstructions()` in `src/replay.ts`). Later Prompts come from `changesBetween(original, worktree.base)`, so a Replay that waited or restarted gets the current list. The diff is cut at 40,000 characters (`MAX_DIFF_LENGTH`). Conflict resolution uses `run.prompt`, the original Prompt.
 - **Repository methods** (ticket 10): `landedChange(commit)` returns a change only for a full 40-character hash on `main`; `diff(commit)` returns `git show` output.
 - **`Runs.replay()` checks the pause before and after reading history, then goes through the same `enqueue()` as Prompts** (ticket 10), so it uses the Player's one waiting slot.
 - **Console: each history entry has "Fix it to this!", which opens an inline confirmation with a "Replay model" dropdown** that survives history refreshes (ticket 10). History shows "↻ Alice replayed Bob's 'prompt' `abc1234`"; Replay Runs are marked ↻ in the Runs and queue lists.
@@ -83,10 +83,10 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`POST /api/rollbacks` with `{commit}` and the nickname cookie** (ticket 09) answers 202 with the Run, or 400 (no nickname), 404 (`not-found`), 409 (`already-waiting`) or 503 (paused). `Runs.rollback()` checks the pause before and after reading history, then uses the same `enqueue()` as Prompts and Replays.
 - **A Rollback Run has `kind: "Rollback"`, `original: {commit, nickname}`, the original change's Prompt as `prompt`, the rolling-back Player as `nickname`, and always `DEFAULT_MODEL` (Sonnet 5.5)** (ticket 09). Players can't pick a model for a Rollback.
 - **Rollback commits use the same `Original:` / `Original-Nickname:` trailers as Replay, with the subject `Rollback by <nick>: <original prompt>`** (ticket 09).
-- **A Rollback first tries `CanvasRepository.revert(worktree, commit)` (`git revert --no-commit`); if that's clean the Agent isn't called** (ticket 09). If it conflicts, the worktree is reset and the Agent gets `rollbackInstructions()` from `src/rollback.ts` (original Prompt and author, the diff cut at `MAX_REPLAY_DIFF_LENGTH`, and later Prompts), starting from the latest Canvas with no conflict markers. The restart repeats revert-then-Agent.
-- **Conflict resolution is told the Run's intent via `Runs.intent(run)`** (ticket 09): for a Rollback that's `rollbackIntent()` ("Roll back X's change … keeping everything after"), so the resolver doesn't re-apply the change. Prompts and Replays still use `run.prompt`.
-- **Known limitation: rolling back a change that's already undone is rejected as "The Agent didn't change anything"** (ticket 09), a confusing message for a mechanical revert.
-- **Console: "Roll back" sits next to "Fix it to this!", with an inline confirmation; only one confirmation is open per entry** (ticket 09). History shows "↩ Alice rolled back Bob's 'prompt' `abc1234`". Roll back buttons aren't disabled while paused; the server answers 503 and the status line shows the error.
+- **A Rollback first tries `CanvasRepository.revert(worktree, commit)` (`git revert --no-commit`); if that's clean the Agent isn't called** (ticket 09). If it conflicts, the worktree is reset and the Agent gets `rollbackInstructions()` from `src/rollback.ts` (original Prompt and author, the diff cut at `MAX_DIFF_LENGTH`, and later Prompts), starting from the latest Canvas with no conflict markers. The restart repeats revert-then-Agent.
+- **Conflict resolution is told the Run's intent from `CHANGE_KIND_RULES[kind].intent`** (ticket 09; code review): for a Rollback that's `rollbackIntent()` ("Roll back X's change … keeping everything after"), so the resolver doesn't re-apply the change. Prompts and Replays still use `run.prompt`.
+- **Rolling back a change that's already undone is rejected with `ALREADY_ROLLED_BACK_MESSAGE` ("That change is already undone")** (code review), used when the mechanical revert applied cleanly and the Lander reports `unchanged`.
+- **Console: "Roll back" sits next to "Fix it to this!", with an inline confirmation; only one confirmation is open per entry** (ticket 09). History shows "↩ Alice rolled back Bob's 'prompt' `abc1234`". While paused, "Fix it to this!", "Roll back" and the confirm buttons are disabled (code review); the page keeps a `paused` flag from the spending poll.
 
 ## Render check
 
@@ -98,9 +98,9 @@ Newest entries at the bottom. Each entry notes where it came from.
 
 ## Queue and the Console WebSocket
 
-- **The parallel Run limit is the `MAX_PARALLEL_RUNS` environment variable, default 3 (`DEFAULT_MAX_PARALLEL_RUNS` in `src/runs.ts`)** (tickets 05, 06). It must be a whole number of at least 1 or the platform won't start, reaches `Runs` through the `maxParallelRuns` option, and only changes on restart. Waiting Prompts start oldest first in `Runs.startWaitingRuns()`. `RunState` starts with `waiting`.
+- **The parallel Run limit starts from `MAX_PARALLEL_RUNS` (default 3) and can be changed during play with `npm run set-parallel-runs -- <n>`** (tickets 05, 06; code review). The command writes `<data>/parallel-runs.json` as `{maxParallelRuns}`; once that file exists it wins over the environment variable, including after a restart. The value can go up or down; lowering never stops Runs in progress. Code is in `src/parallel-limit.ts`; `Runs` takes `maxParallelRuns` as a number or a function, and the platform passes one that re-reads the file.
 - **One waiting Prompt per Player is an exact match on the trimmed nickname** (ticket 05). A second one gets 409 with reason `already-waiting`. The slot frees as soon as the Prompt starts running.
-- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending. Because `raise-cap` only writes a file, `startWaitingRuns()` re-checks every 500 ms while paused (`PAUSED_RECHECK_MS`), so waiting Prompts start within about half a second of a raise.
+- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending. Because `raise-cap` and `set-parallel-runs` only write files, `startWaitingRuns()` re-checks every 500 ms whenever Prompts are waiting (`WAITING_RECHECK_MS`). Each call clears the pending timer, so a finished Run starts the next one immediately.
 - **The Console WebSocket is `/api/live`, using the `ws` package** (ticket 05). On connecting, a client gets `{type:"snapshot", queue, runs}`, then `queue`, `run` (every state change) and `progress` messages. The snapshot holds Runs in progress plus the last 20 finished; each Run view keeps its latest 50 progress events. Types are `RunsEvent` and `RunsSnapshot` in `runs.ts`.
 - **`Runs.subscribe(listener)` gets every Run event** (ticket 05). Ticket 04's `onChange` wraps it, so it also fires for `waiting`, which the Canvas channel ignores.
 - **WebSocket upgrades go through `isCrossOrigin()` (403) and get 404 for any other path** (ticket 05). Any future WebSocket must do the same.
@@ -126,9 +126,9 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The queue and Run records are saved in `<data>/runs.sqlite`** (ticket 13, `RunStore` in `src/run-store.ts`, `node:sqlite` in WAL mode), separate from `services.sqlite`. One row per Run: `seq` (send order), `id`, `state` as plain text with no constraint, and the rest of the Run as JSON without progress. New states and fields need no schema change, but **a new finished state must be added to `FINISHED` in `run-store.ts`**; anything else counts as unfinished.
 - **Every state change is saved by `Runs.setState`**, plus once when a Prompt is queued (ticket 13). Always change state through `setState`.
 - **`Runs.resume()` runs at startup, before the servers listen** (ticket 13): remove all leftover worktrees and `run/*` branches; reload the 20 most recently finished Runs; restart unfinished Runs from scratch on the latest `main` with the same id and Prompt; re-queue waiting Prompts in order.
-- **Restarted Runs skip the parallel limit and the spending pause** (ticket 13), matching the rule that Runs in progress are never stopped. Their tokens are spent again, and earlier progress events are lost.
+- **Resumed Runs wait in a private `resuming` list that starts ahead of the queue, respecting the parallel limit but not the spending pause** (code review, replacing ticket 13's "skip the limit"). They don't appear in the queue snapshot or take the Player's waiting slot, and their saved state is unchanged until they start. Their tokens are spent again, and earlier progress events are lost.
 - **Agents must fail when aborted, never return success** (ticket 13). `close()` aborts Runs; one that doesn't Land stays saved as in progress and restarts on the next start.
-- **Known limitation: if the process is killed after `main` moves but before `landed` is saved, the Prompt runs again after restart and can Land twice** (ticket 13). Fix if needed: add a `Run:` trailer to commits and check history in `resume()`.
+- **Every Landed commit has a `Run: <id>` trailer, and `resume()` marks an unfinished Run as landed if its id is already on `main`** (code review), so a crash between moving `main` and saving `landed` can't Land a Prompt twice. `history()` is read only if some unfinished Run isn't waiting. `/api/history` entries include `run`.
 - **`Runs` needs a `store: RunStore` in its constructor** (ticket 13).
 
 ## Spending cap
@@ -139,6 +139,14 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The cap comes from `SPENDING_CAP_USD`** (default $10; the `spendingCapUsd` option in tests). `npm run raise-cap -- <dollars>`, run with `docker compose exec platform`, only raises it.
 - **The platform and the `raise-cap` command share state only through files in the data folder** (ticket 12). The platform writes `spending.json`, the command writes `spending-cap.json`, both atomically, and the platform re-reads the cap file on every check. The cap in force is the higher of the configured and raised caps. The command reads `SPENDING_CAP_USD` from its own environment, which is correct under `docker compose exec`.
 - **`GET /api/spending` returns `{totalUsd, capUsd, paused}`** (ticket 12). The Console polls it every 2 seconds for now; ticket 05's WebSocket can push the same body instead.
+
+## Shared code (code review)
+
+- **New POST endpoints that queue a Run use `queueChange(req, res, fn)` in `console-server.ts`**; the refusal error is `ChangeRefused` (formerly `PromptRefused`).
+- **Diff cutting and the "later Prompts" list live in `src/change-context.ts`**, shared by Replay, Rollback and conflict resolution.
+- **`positiveNumberFromEnvironment(env, name, fallback, {whole?})` in `src/environment.ts` parses numeric env vars**; `SPENDING_CAP_USD` keeps its own parser because it allows 0.
+- **`readNumber` and `writeJsonAtomically` live in `src/data-files.ts`**, for the host-command files.
+- **`RESOLUTION_MODEL` is `DEFAULT_MODEL`.**
 
 ## Security
 
