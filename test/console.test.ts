@@ -8,7 +8,7 @@ describe("Console server", () => {
     platform = undefined;
   });
 
-  it("shows a placeholder page", async () => {
+  it("serves the Console page", async () => {
     platform = await startTestPlatform();
     const page = await fetch(platform.consoleUrl + "/");
     expect(page.status).toBe(200);

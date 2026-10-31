@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Console</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    form { display: grid; gap: 0.5rem; margin-bottom: 1.5rem; }
+    textarea { min-height: 6rem; font: inherit; }
+    .row { display: flex; gap: 0.5rem; align-items: center; }
+    .counter { margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }
+    .error { color: #b00020; }
+    #history { list-style: none; padding: 0; }
+    #history li { border-top: 1px solid #ddd; padding: 0.5rem 0; }
+    #history time { color: #666; font-size: 0.85em; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <h1>Console</h1>
+
+  <form id="nickname-form" hidden>
+    <label for="nickname">Nickname</label>
+    <div class="row">
+      <input id="nickname" name="nickname" maxlength="40" required autocomplete="nickname">
+      <button type="submit">Join</button>
+    </div>
+  </form>
+
+  <section id="player" hidden>
+    <p>Playing as <strong data-testid="current-nickname" id="current-nickname"></strong>
+      <button type="button" id="change-nickname">Change nickname</button></p>
+
+    <form id="prompt-form">
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" name="prompt" maxlength="500" required placeholder="Make the page snow"></textarea>
+      <div class="row">
+        <label for="model">Model</label>
+        <select id="model" name="model">
+          <option value="claude-sonnet-5-5" selected>Sonnet 5.5</option>
+          <option value="claude-opus-5-5">Opus 5.5</option>
+        </select>
+        <span class="counter" data-testid="prompt-counter" id="prompt-counter">0 / 500</span>
+        <button type="submit">Send</button>
+      </div>
+      <p id="status" role="status"></p>
+    </form>
+  </section>
+
+  <h2>History</h2>
+  <ol id="history" data-testid="history"></ol>
+
+  <script type="module">
+    const $ = (id) => document.getElementById(id);
+    const MAX_PROMPT = 500;
+
+    function readNickname() {
+      const entry = document.cookie.split("; ").find((c) => c.startsWith("nickname="));
+      return entry ? decodeURIComponent(entry.slice("nickname=".length)) : "";
+    }
+
+    function showPlayer() {
+      const nickname = readNickname();
+      $("nickname-form").hidden = nickname !== "";
+      $("player").hidden = nickname === "";
+      $("current-nickname").textContent = nickname;
+      if (nickname === "") $("nickname").focus();
+    }
+
+    $("nickname-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const nickname = $("nickname").value.trim();
+      if (nickname === "") return;
+      document.cookie = `nickname=${encodeURIComponent(nickname)}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=strict`;
+      showPlayer();
+    });
+
+    $("change-nickname").addEventListener("click", () => {
+      $("nickname").value = readNickname();
+      $("nickname-form").hidden = false;
+      $("player").hidden = true;
+      $("nickname").focus();
+    });
+
+    const updateCounter = () => ($("prompt-counter").textContent = `${$("prompt").value.length} / ${MAX_PROMPT}`);
+    $("prompt").addEventListener("input", updateCounter);
+
+    function setStatus(message, isError = false) {
+      $("status").textContent = message;
+      $("status").className = isError ? "error" : "";
+    }
+
+    $("prompt-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const response = await fetch("/api/prompts", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: $("prompt").value, model: $("model").value }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) return setStatus(body.error ?? "The Prompt was refused", true);
+      $("prompt").value = "";
+      updateCounter();
+      setStatus("Claude is working on it…");
+      void followRun(body.id);
+    });
+
+    async function followRun(id) {
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const response = await fetch(`/api/runs/${encodeURIComponent(id)}`);
+        if (!response.ok) return;
+        const run = await response.json();
+        if (run.state === "landed") return setStatus("Your change Landed!"), refreshHistory();
+        if (run.state === "rejected") return setStatus(`Your Prompt didn't Land: ${run.error}`, true);
+      }
+    }
+
+    async function refreshHistory() {
+      const response = await fetch("/api/history");
+      if (!response.ok) return;
+      const changes = await response.json();
+      $("history").replaceChildren(
+        ...changes.map((change) => {
+          const item = document.createElement("li");
+          const who = document.createElement("strong");
+          who.textContent = change.nickname;
+          const prompt = document.createElement("q");
+          prompt.textContent = change.prompt;
+          const time = document.createElement("time");
+          time.dateTime = change.time;
+          time.textContent = new Date(change.time).toLocaleString();
+          item.append(who, ": ", prompt, " ", time);
+          return item;
+        }),
+      );
+    }
+
+    showPlayer();
+    updateCounter();
+    void refreshHistory();
+    setInterval(refreshHistory, 5000);
+  </script>
+</body>
+</html>

@@ -22,8 +22,21 @@ export interface TestPlatform {
   /** Calls the Console API, e.g. `consoleApi("/api/health")`. */
   consoleApi(apiPath: string, init?: RequestInit): Promise<Response>;
   fetchCanvas(canvasPath: string, init?: RequestInit): Promise<Response>;
+  /** Sends a Prompt as a Player would; throws unless the Console accepts it. */
+  sendPrompt(prompt: { nickname: string; prompt: string; model?: string }): Promise<RunView>;
+  /** Polls a Run until it has Landed or been rejected. */
+  waitForRun(runId: string): Promise<RunView>;
   /** Stops the platform and removes its data folder if the harness created it. */
   close(): Promise<void>;
+}
+
+export interface RunView {
+  id: string;
+  state: string;
+  nickname: string;
+  prompt: string;
+  model: string;
+  error?: string;
 }
 
 /**
@@ -38,14 +51,34 @@ export async function startTestPlatform(options: TestPlatformOptions = {}): Prom
   const consoleUrl = `http://127.0.0.1:${platform.consolePort}`;
   const canvasUrl = `http://127.0.0.1:${platform.canvasPort}`;
 
+  const consoleApi = (apiPath: string, init?: RequestInit) => fetch(consoleUrl + apiPath, init);
+
   return {
     consoleUrl,
     canvasUrl,
     dataDir,
     agent,
     canvasRepoDir: path.join(dataDir, "canvas"),
-    consoleApi: (apiPath, init) => fetch(consoleUrl + apiPath, init),
+    consoleApi,
     fetchCanvas: (canvasPath, init) => fetch(canvasUrl + canvasPath, init),
+    async sendPrompt({ nickname, ...body }) {
+      const response = await consoleApi("/api/prompts", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: `nickname=${encodeURIComponent(nickname)}` },
+        body: JSON.stringify(body),
+      });
+      if (response.status !== 202) throw new Error(`Prompt refused (${response.status}): ${await response.text()}`);
+      return (await response.json()) as RunView;
+    },
+    async waitForRun(runId) {
+      while (true) {
+        const response = await consoleApi(`/api/runs/${encodeURIComponent(runId)}`);
+        if (!response.ok) throw new Error(`No such Run ${runId} (${response.status})`);
+        const run = (await response.json()) as RunView;
+        if (run.state === "landed" || run.state === "rejected") return run;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    },
     async close() {
       await platform.close();
       if (ownsDataDir) await rm(dataDir, { recursive: true, force: true });

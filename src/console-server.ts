@@ -1,29 +1,86 @@
-import { createServer, type Server } from "node:http";
+import { readFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { CanvasRepository } from "./canvas-repository.ts";
 import { isCrossOrigin } from "./http.ts";
+import { PromptRefused, type Runs } from "./runs.ts";
 
-const PLACEHOLDER_PAGE = `<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Console</title></head>
-<body><h1>Console</h1><p>Prompts are coming soon.</p></body>
-</html>
-`;
+const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
+const MAX_BODY_BYTES = 16 * 1024;
 
 /** Serves the Console UI and the Console API. */
-export function createConsoleServer(): Server {
-  return createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://console");
-    if (url.pathname === "/" && req.method === "GET") {
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(PLACEHOLDER_PAGE);
-      return;
+export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository }): Server {
+  const { runs, repo } = options;
+  return createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://console");
+      if (url.pathname === "/" && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }).end(CONSOLE_PAGE);
+        return;
+      }
+      if (url.pathname.startsWith("/api/") && isCrossOrigin(req)) {
+        res.writeHead(403).end("The Console API only answers the Console");
+        return;
+      }
+      if (url.pathname === "/api/health" && req.method === "GET") {
+        return sendJson(res, 200, { ok: true });
+      }
+      if (url.pathname === "/api/prompts" && req.method === "POST") {
+        const body = await readJson(req);
+        if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
+        try {
+          const run = runs.start({ nickname: cookie(req, "nickname"), prompt: body.prompt, model: body.model });
+          return sendJson(res, 202, run);
+        } catch (error) {
+          if (!(error instanceof PromptRefused)) throw error;
+          return sendJson(res, error.reason === "busy" ? 409 : 400, { error: error.message });
+        }
+      }
+      const runMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
+      if (runMatch && req.method === "GET") {
+        const run = runs.get(decodeURIComponent(runMatch[1]));
+        return run ? sendJson(res, 200, run) : sendJson(res, 404, { error: "No such Run" });
+      }
+      if (url.pathname === "/api/history" && req.method === "GET") {
+        return sendJson(res, 200, await repo.history());
+      }
+      res.writeHead(404).end("Not found");
+    } catch (error) {
+      console.error("Console server error", error);
+      if (!res.headersSent) res.writeHead(500);
+      res.end("Internal error");
     }
-    if (url.pathname.startsWith("/api/") && isCrossOrigin(req)) {
-      res.writeHead(403).end("The Console API only answers the Console");
-      return;
-    }
-    if (url.pathname === "/api/health" && req.method === "GET") {
-      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ ok: true }));
-      return;
-    }
-    res.writeHead(404).end("Not found");
   });
+}
+
+function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(body));
+}
+
+async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) return undefined;
+    chunks.push(chunk);
+  }
+  try {
+    const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function cookie(req: IncomingMessage, name: string): string | undefined {
+  for (const part of (req.headers.cookie ?? "").split(";")) {
+    const [key, ...rest] = part.trim().split("=");
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(rest.join("="));
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }

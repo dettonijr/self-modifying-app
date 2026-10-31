@@ -4,6 +4,8 @@ import { CanvasRepository } from "./canvas-repository.ts";
 import { createCanvasServer } from "./canvas-server.ts";
 import { createConsoleServer } from "./console-server.ts";
 import { close, listen } from "./http.ts";
+import { Lander } from "./lander.ts";
+import { Runs } from "./runs.ts";
 
 export interface PlatformOptions {
   /** Holds the Canvas repo (and later the SQLite database). Created if missing. */
@@ -27,7 +29,9 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
   const host = options.host ?? "0.0.0.0";
   const repo = await CanvasRepository.open(path.join(options.dataDir, "canvas"));
 
-  const consoleServer = createConsoleServer();
+  const runs = new Runs({ repo, agent: options.agent, lander: new Lander(repo), worktreesDir: path.join(options.dataDir, "worktrees") });
+
+  const consoleServer = createConsoleServer({ runs, repo });
   const canvasServer = createCanvasServer(repo);
   const consolePort = await listen(consoleServer, options.consolePort ?? 0, host);
   const canvasPort = await listen(canvasServer, options.canvasPort ?? 0, host);
@@ -37,6 +41,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
     canvasPort,
     async close() {
       await Promise.all([close(consoleServer), close(canvasServer)]);
+      await runs.close();
     },
   };
 }

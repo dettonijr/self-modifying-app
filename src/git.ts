@@ -15,10 +15,10 @@ const IDENTITY = {
   GIT_COMMITTER_EMAIL: "platform@self-modifying-app.local",
 };
 
-/** Runs git in `cwd` and returns stdout as raw bytes. */
-export function gitBytes(cwd: string, args: string[]): Promise<Buffer> {
+/** Runs git in `cwd` and returns stdout as raw bytes. `input` is written to its stdin. */
+export function gitBytes(cwd: string, args: string[], input?: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    execFile(
+    const child = execFile(
       "git",
       args,
       { cwd, encoding: "buffer", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...IDENTITY } },
@@ -27,9 +27,10 @@ export function gitBytes(cwd: string, args: string[]): Promise<Buffer> {
         else resolve(stdout);
       },
     );
+    child.stdin?.end(input);
   });
 }
 
-export async function git(cwd: string, args: string[]): Promise<string> {
-  return (await gitBytes(cwd, args)).toString("utf8").trim();
+export async function git(cwd: string, args: string[], input?: string): Promise<string> {
+  return (await gitBytes(cwd, args, input)).toString("utf8").trim();
 }
