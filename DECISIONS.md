@@ -45,6 +45,13 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The reload notice survives the reload through `sessionStorage`** and shows for 6 seconds (ticket 04).
 - **Known limitation: if a Land deletes the page a viewer is on, the reload ends at a 404** (ticket 04).
 
+## Landing
+
+- **The Lander lands one Run at a time, in the order Runs reach `land()`, using a chain of promises** (ticket 06). Each Land: commit the worktree, read the current `main`, rebase with `CanvasRepository.rebaseWorktree(worktree, onto)`, run the render check, then move `main` with the compare-and-swap, expecting the `main` it rebased onto.
+- **`LandFailure` is `"unchanged" | "conflict" | "render"`** (ticket 06). A conflicting rebase is aborted and returns `conflict`, with the message "The change conflicts with one that Landed while it was being made". Ticket 08 builds its handling on this.
+- **Test pitfall: `FakeAgent` hands out scripts in the order Runs start, and worktree creation can reorder them under load** (ticket 06). Tests that hold a specific Run must wait with `agent.started(n)` before sending the next Prompt, or pick behaviour from `run.task.instructions`.
+- **Tests that assume one Run at a time set `maxParallelRuns: 1`** (ticket 06), e.g. `queue.test.ts` and `console-ui.test.ts`.
+
 ## Render check
 
 - **The render check is its own step in the Lander** (ticket 07): commit the worktree, run the check, then move `main`. Failures return `failure: "render"` (reason "Canvas didn't render") or `failure: "unchanged"`; ticket 08 routes on `failure`. The specific problem is only logged with `console.warn`; Players see "Canvas didn't render".
@@ -55,10 +62,10 @@ Newest entries at the bottom. Each entry notes where it came from.
 
 ## Queue and the Console WebSocket
 
-- **The parallel Run limit lives only in `MAX_PARALLEL_RUNS` in `src/runs.ts`** (ticket 05). Waiting Prompts start oldest first in `Runs.startWaitingRuns()`. `RunState` starts with `waiting`.
+- **The parallel Run limit is the `MAX_PARALLEL_RUNS` environment variable, default 3 (`DEFAULT_MAX_PARALLEL_RUNS` in `src/runs.ts`)** (tickets 05, 06). It must be a whole number of at least 1 or the platform won't start, reaches `Runs` through the `maxParallelRuns` option, and only changes on restart. Waiting Prompts start oldest first in `Runs.startWaitingRuns()`. `RunState` starts with `waiting`.
 - **One waiting Prompt per Player is an exact match on the trimmed nickname** (ticket 05). A second one gets 409 with reason `already-waiting`. The slot frees as soon as the Prompt starts running.
 - **The queue is in memory only until ticket 13**, so a shutdown drops waiting Prompts.
-- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending.
+- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending. Because `raise-cap` only writes a file, `startWaitingRuns()` re-checks every 500 ms while paused (`PAUSED_RECHECK_MS`), so waiting Prompts start within about half a second of a raise.
 - **The Console WebSocket is `/api/live`, using the `ws` package** (ticket 05). On connecting, a client gets `{type:"snapshot", queue, runs}`, then `queue`, `run` (every state change) and `progress` messages. The snapshot holds Runs in progress plus the last 20 finished; each Run view keeps its latest 50 progress events. Types are `RunsEvent` and `RunsSnapshot` in `runs.ts`.
 - **`Runs.subscribe(listener)` gets every Run event** (ticket 05). Ticket 04's `onChange` wraps it, so it also fires for `waiting`, which the Canvas channel ignores.
 - **WebSocket upgrades go through `isCrossOrigin()` (403) and get 404 for any other path** (ticket 05). Any future WebSocket must do the same.
