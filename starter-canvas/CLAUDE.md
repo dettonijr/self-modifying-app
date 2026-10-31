@@ -21,3 +21,5 @@ This folder is the Canvas: a website that changes in response to Prompts sent by
 ## The platform script
 
 - The platform injects its own script into every page it serves (the "changing the page" banner and automatic reload). Don't try to edit, remove or work around it.
+- Paths under `/__platform/` belong to the platform; don't create files there.
+- Pages are served at URLs that include the version, like `/@<commit>/index.html`. Refer to the Canvas's own files with relative URLs (`theme.css`, `features/x/x.js`, `./y.js`), never ones starting with `/`, so every file a page loads comes from the same version.

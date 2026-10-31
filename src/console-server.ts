@@ -2,19 +2,21 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
+import type { Budget } from "./budget.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { isCrossOrigin } from "./http.ts";
 import { PromptRefused, type Runs } from "./runs.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
 const MAX_BODY_BYTES = 16 * 1024;
+const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503 };
 
 /**
  * Serves the Console UI and the Console API, including `/api/live`: a
  * WebSocket that sends a `snapshot` on connecting, then every `RunsEvent`.
  */
-export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository }): Server {
-  const { runs, repo } = options;
+export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository; budget: Budget }): Server {
+  const { runs, repo, budget } = options;
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://console");
@@ -37,13 +39,16 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
           return sendJson(res, 202, run);
         } catch (error) {
           if (!(error instanceof PromptRefused)) throw error;
-          return sendJson(res, error.reason === "already-waiting" ? 409 : 400, { error: error.message });
+          return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
         }
       }
       const runMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
       if (runMatch && req.method === "GET") {
         const run = runs.get(decodeURIComponent(runMatch[1]));
         return run ? sendJson(res, 200, run) : sendJson(res, 404, { error: "No such Run" });
+      }
+      if (url.pathname === "/api/spending" && req.method === "GET") {
+        return sendJson(res, 200, budget.spending());
       }
       if (url.pathname === "/api/history" && req.method === "GET") {
         return sendJson(res, 200, await repo.history());

@@ -4,6 +4,12 @@ services:
     ports:
       - "${CONSOLE_PORT:-3000}:3000" # Console
       - "${CANVAS_PORT:-3001}:3001" # Canvas
+    environment:
+      - SPENDING_CAP_USD=${SPENDING_CAP_USD:-10}
+      # Read from the host's environment or an `.env` file; never put the key in the Canvas.
+      - ANTHROPIC_API_KEY
+      - RUN_TIME_LIMIT_SECONDS
+      - RUN_TOKEN_LIMIT
     volumes:
       - data:/data
     restart: unless-stopped

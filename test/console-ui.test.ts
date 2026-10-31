@@ -1,7 +1,7 @@
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { FakeAgent, Gate } from "./support/fake-agent.ts";
-import { startTestPlatform, type TestPlatform } from "./support/harness.ts";
+import { startTestPlatform, type TestPlatform, type TestPlatformOptions } from "./support/harness.ts";
 
 describe("Console UI", () => {
   let browser: Browser;
@@ -15,8 +15,11 @@ describe("Console UI", () => {
   afterEach(async () => {
     await Promise.all(platforms.splice(0).map((p) => p.close()));
   });
-  async function open(agent = new FakeAgent()): Promise<{ page: Page; platform: TestPlatform; agent: FakeAgent }> {
-    const platform = await startTestPlatform({ agent });
+  async function open(
+    agent = new FakeAgent(),
+    options: TestPlatformOptions = {},
+  ): Promise<{ page: Page; platform: TestPlatform; agent: FakeAgent }> {
+    const platform = await startTestPlatform({ agent, ...options });
     platforms.push(platform);
     const page = await (await browser.newContext()).newPage();
     await page.goto(platform.consoleUrl + "/");
@@ -83,7 +86,37 @@ describe("Console UI", () => {
     expect(await entry.textContent()).toContain("Alice");
     expect(await entry.locator("time").getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(agent.tasks[0].model).toBe("claude-opus-5-5");
-    expect(await (await platform.fetchCanvas("/")).text()).toBe("<h1>Snowing</h1>");
+    expect(await (await platform.fetchCanvas("/")).text()).toContain("<h1>Snowing</h1>");
+  });
+
+  it("shows the running cost live to everyone, and the paused state once the spending cap is reached", async () => {
+    const { page, platform, agent } = await open(new FakeAgent(), { spendingCapUsd: 2 });
+    const watcher = await (await browser.newContext()).newPage();
+    await watcher.goto(platform.consoleUrl + "/");
+    for (const p of [page, watcher]) await expect.poll(() => p.getByTestId("spending").textContent()).toContain("$0.00 of $2.00");
+
+    agent.enqueue(
+      async (run) => {
+        run.usage({ inputTokens: 100_000, outputTokens: 100_000 }); // $1.20 on Sonnet 5.5
+        await run.writeFile("index.html", "<h1>one</h1>");
+      },
+      async (run) => {
+        run.usage({ inputTokens: 400_000, outputTokens: 0 }); // $0.80 more: the cap
+        await run.writeFile("index.html", "<h1>two</h1>");
+      },
+    );
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "one" })).id);
+    await expect.poll(() => watcher.getByTestId("spending").textContent(), { timeout: 10_000 }).toContain("$1.20 of $2.00");
+    expect(await watcher.getByTestId("paused").isVisible()).toBe(false);
+
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "two" })).id);
+    await expect.poll(() => watcher.getByTestId("paused").isVisible(), { timeout: 10_000 }).toBe(true);
+    expect(await watcher.getByTestId("paused").textContent()).toMatch(/spending cap/i);
+    expect(await watcher.getByTestId("spending").textContent()).toContain("$2.00 of $2.00");
+
+    await join({ page });
+    await page.getByLabel("Prompt").fill("three");
+    await expect.poll(() => page.getByRole("button", { name: "Send" }).isDisabled(), { timeout: 10_000 }).toBe(true);
   });
 
   it("shows the live queue, the Run in progress with its progress, and each Run's outcome with its reason", async () => {

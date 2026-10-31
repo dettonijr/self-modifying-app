@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
+import type { Budget } from "./budget.ts";
 import type { CanvasRepository, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
 export const MAX_NICKNAME_LENGTH = 40;
+export const PAUSED_MESSAGE = "The Console is paused: the game has reached its spending cap. The host can raise it to continue.";
 
 /**
  * How many Runs may be in progress at once. Prompts beyond this wait in the
@@ -60,9 +62,12 @@ export interface PromptRequest {
 }
 
 export class PromptRefused extends Error {
-  /** `invalid`: the request breaks a rule. `already-waiting`: the Player already has a Prompt in the queue. */
-  readonly reason: "invalid" | "already-waiting";
-  constructor(reason: "invalid" | "already-waiting", message: string) {
+  /**
+   * `invalid`: the request breaks a rule. `already-waiting`: the Player already has a Prompt in the queue.
+   * `paused`: the spending cap is reached.
+   */
+  readonly reason: "invalid" | "already-waiting" | "paused";
+  constructor(reason: "invalid" | "already-waiting" | "paused", message: string) {
     super(message);
     this.reason = reason;
   }
@@ -78,6 +83,7 @@ export class Runs {
   private readonly repo: CanvasRepository;
   private readonly agent: Agent;
   private readonly lander: Lander;
+  private readonly budget: Budget;
   private readonly worktreesDir: string;
   private readonly runs = new Map<string, RunView>();
   private readonly queue: RunView[] = [];
@@ -87,15 +93,17 @@ export class Runs {
   private closed = false;
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
 
-  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; worktreesDir: string }) {
+  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; worktreesDir: string }) {
     this.repo = options.repo;
     this.agent = options.agent;
     this.lander = options.lander;
+    this.budget = options.budget;
     this.worktreesDir = options.worktreesDir;
   }
 
   /** Validates a Prompt and queues its Run, or throws `PromptRefused`. Each Player (nickname) may have one Prompt waiting. */
   start(request: PromptRequest): RunView {
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
     if (this.queue.some((waiting) => waiting.nickname === nickname)) {
       throw new PromptRefused("already-waiting", "You already have a Prompt waiting; you can send another once it starts running");
@@ -123,6 +131,18 @@ export class Runs {
   subscribe(listener: (event: RunsEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  /** Calls `listener` with a Run each time one joins the queue or changes state. Returns a function that stops it. */
+  onChange(listener: (run: RunView) => void): () => void {
+    return this.subscribe((event) => {
+      if (event.type === "run") listener(event.run);
+    });
+  }
+
+  /** Runs that have started but haven't finished yet. */
+  inProgressRuns(): RunView[] {
+    return [...this.inProgress.keys()].flatMap((id) => this.get(id) ?? []);
   }
 
   /** Drops the queue, aborts Runs in progress and waits for them to clean up. */
@@ -215,6 +235,7 @@ export class Runs {
   private async runAgent(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<string | undefined> {
     const events = this.agent.run({ worktree: worktree.dir, instructions: run.prompt, model: run.model, signal });
     for await (const event of events) {
+      if (event.type === "usage") this.budget.record(run.model, event.usage);
       if (event.type === "progress") {
         const progress: RunProgress = event.file === undefined ? { message: event.message } : { message: event.message, file: event.file };
         run.progress.push(progress);
