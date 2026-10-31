@@ -149,6 +149,17 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`readNumber` and `writeJsonAtomically` live in `src/data-files.ts`**, for the host-command files.
 - **`RESOLUTION_MODEL` is `DEFAULT_MODEL`.**
 
+## Prompts list
+
+- **`RunSummary = Omit<RunView, "progress">` in `runs.ts`** (Prompts list ticket 01): `id, state, nickname, prompt, model, kind?, original?, error?, commit?, time?`. `time` is when the Prompt was sent (or, for a Landed change with no Run record, when it Landed); older Landed Runs without one get the commit time at startup. Logs and files must stay out of the summary and be served only by `GET /api/runs/:id`.
+- **`GET /api/runs` returns every summary, newest first, via `Runs.list()`**; `GET /api/runs/:id` returns the full view (ticket 01).
+- **The live WebSocket's `snapshot` is `{queue, runs}`, with `runs` the whole list newest first, waiting Runs included; `run` and `queue` messages carry summaries** (ticket 01). `progress` messages are unchanged. `Runs.onChange` hands listeners a `RunSummary`.
+- **Every Run stays in memory forever, in send order, so entries never move** (ticket 01). `MAX_RECENT_RUNS`, `recent` and `forgetOldRuns` are gone; `RunStore.all()` replaces `recentlyFinished`/`unfinished`. `resume()` always reads the history.
+- **Landed changes with no Run record appear as Landed entries whose id is their `Run` trailer or else their commit hash** (ticket 01), so `/runs/<id>` must accept both. Known limitation: they're all placed as older than every saved Run, whatever their dates.
+- **Console list markup** (ticket 01): `<ol data-testid="prompts">`; each `li` has `data-run`, `data-state`, `data-original`, and `.state`, `.nickname`, `.prompt`, `.model`, `time`, `.outcome`. Prompts over 80 characters are cut with "…" (full text in `title`). Entries are replaced in place on `run` messages; pause-disabled buttons are marked `data-pausable`; an open confirmation survives updates.
+- **`/api/history` is still served for tests and the harness, but the Console doesn't use it** (ticket 01). Removing it means moving those tests to `/api/runs`.
+- **Test pitfalls** (ticket 01): in Playwright, `getByRole("button", { name: "Replay" })` also matches "Yes, replay", so use `exact: true`. A test committing straight into the Canvas repo must pass `-c user.name=… -c user.email=…`, since the platform's git identity comes from environment variables the test's `git` doesn't get.
+
 ## Look and feel
 
 - **The platform pages use the Tokyo Night (Night) palette, dark only for now** (user, 2026-10-31). The Console, Run page and Canvas banner/notice take every colour from one palette file of named variables, so the palette can be swapped by editing that file; a light theme (Tokyo Night Day) would just be a second set of values.
