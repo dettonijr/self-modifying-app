@@ -25,6 +25,17 @@
     .entries .source { font-size: 0.8em; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; color: #666; }
     .entries [data-source="claude"] .source { color: #5a3fc0; }
     .entries .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .files { list-style: none; padding: 0; }
+    .file { margin: 0.25rem 0; }
+    .file summary { cursor: pointer; padding: 0.5rem 0; }
+    .file .path { font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    .file .additions { color: #1b7a33; }
+    .file .removals { color: #b00020; }
+    .diff { overflow-x: auto; margin: 0; padding: 0.5rem; background: #f6f6f6; font-size: 0.85em; }
+    .diff .line { display: block; white-space: pre; }
+    .diff .line.added { background: #e6ffec; }
+    .diff .line.removed { background: #ffebe9; }
+    .diff .line.hunk, .diff .line.meta { color: #666; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -53,9 +64,9 @@
       <div class="body"></div>
     </section>
 
-    <!-- Ticket 04 fills this section with the changed files. -->
     <section id="files" data-testid="files">
       <h2>Changed files</h2>
+      <p id="canvas-version" hidden><a>View the Canvas at this version</a></p>
       <div class="body"></div>
     </section>
   </article>
@@ -113,11 +124,78 @@
       return item;
     }
 
+    /**
+     * The files the Run changed: names while it's in progress, updated live;
+     * once finished, each with its added and removed line counts, expanding
+     * to its diff. A Landed Run also links to the Canvas at its commit.
+     */
     const filesSection = {
       element: $("files").querySelector(".body"),
-      render(_run) {},
-      live(_message) {},
+      render(run) {
+        this.element.replaceChildren(changedFilesList(run.files ?? [], { finished: isFinished(run) }));
+        void showCanvasVersion(run.state === "landed" ? run.commit : undefined);
+      },
+      live(message) {
+        if (message.type === "files") this.element.replaceChildren(changedFilesList(message.files.map((path) => ({ path })), { finished: false }));
+        // Finished: fetch the final change, which only the Run's endpoint serves.
+        if (message.type === "run" && isFinished(message.run)) void refreshFiles();
+      },
     };
+
+    async function refreshFiles() {
+      const response = await fetch(`/api/runs/${encodeURIComponent(run.id)}`);
+      if (response.ok) filesSection.render(await response.json());
+    }
+
+    /**
+     * A list of changed files. Files with a diff (any saved diff, split per
+     * file by the Console API) show their counts and expand to it.
+     */
+    function changedFilesList(files, { finished }) {
+      if (files.length === 0) return span("empty", finished ? "No changes" : "No files edited yet");
+      const list = document.createElement("ul");
+      list.className = "files";
+      list.append(...files.map((file) => {
+        if (file.diff === undefined) {
+          const item = document.createElement("li");
+          item.className = "file";
+          item.append(span("path", file.path));
+          return item;
+        }
+        const item = document.createElement("li");
+        const details = document.createElement("details");
+        details.className = "file";
+        const summary = document.createElement("summary");
+        summary.append(span("path", file.path), " ", span("additions", `+${file.added}`), " ", span("removals", `−${file.removed}`));
+        const diff = document.createElement("pre");
+        diff.className = "diff";
+        diff.append(...file.diff.split("\n").map(diffLine));
+        details.append(summary, diff);
+        item.append(details);
+        return item;
+      }));
+      return list;
+    }
+
+    function diffLine(text) {
+      const kind = text.startsWith("@@") ? "hunk"
+        : /^(diff |index |--- |\+\+\+ |new file|deleted file|old mode|new mode|similarity|rename |Binary )/.test(text) ? "meta"
+        : text.startsWith("+") ? "added"
+        : text.startsWith("-") ? "removed"
+        : "context";
+      return span(`line ${kind}`, text);
+    }
+
+    let canvasPort;
+    /** Shows the link to the Canvas's commit-pinned URL for `commit`, or hides it if there's none. */
+    async function showCanvasVersion(commit) {
+      const paragraph = $("canvas-version");
+      if (commit === undefined) return void (paragraph.hidden = true);
+      canvasPort ??= await fetch("/api/canvas").then((response) => (response.ok ? response.json() : undefined)).then((canvas) => canvas?.port);
+      if (canvasPort === undefined) return;
+      paragraph.querySelector("a").href = `${location.protocol}//${location.hostname}:${canvasPort}/@${commit}/`;
+      paragraph.hidden = false;
+    }
 
     const sections = [logSection, filesSection];
 

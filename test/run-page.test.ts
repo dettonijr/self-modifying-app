@@ -271,4 +271,76 @@ describe("The Run page", () => {
     await page.waitForURL(runUrl);
     await expect.poll(() => page.getByTestId("run").getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
   });
+
+  it("shows the files being edited while the Run is in progress, live, and still after a reload", async () => {
+    const { platform, agent } = await start();
+    const editing = new Gate();
+    const done = new Gate();
+    agent.enqueue(async (run) => {
+      await run.writeFile("features/snow/snow.js", "snow");
+      await editing.wait();
+      await run.writeFile("features/snow/snow.css", "body {}");
+      await done.wait();
+    });
+    const { id } = await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" });
+    await agent.started(1);
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${id}`);
+    const files = page.getByTestId("files");
+    const names = () => files.locator(".file .path").allTextContents();
+    await expect.poll(names, { timeout: 10_000 }).toEqual(["features/snow/snow.js"]);
+
+    editing.release();
+    await expect.poll(names, { timeout: 10_000 }).toEqual(["features/snow/snow.js", "features/snow/snow.css"]);
+    expect(await files.locator(".diff").count()).toBe(0);
+    await page.reload();
+    await expect.poll(names, { timeout: 10_000 }).toEqual(["features/snow/snow.js", "features/snow/snow.css"]);
+
+    // Once it Lands, the open page shows the final change.
+    done.release();
+    await expect.poll(() => files.locator(".file .additions").allTextContents(), { timeout: 10_000 }).toEqual(["+1", "+1"]);
+    expect(await names()).toEqual(["features/snow/snow.css", "features/snow/snow.js"]);
+  });
+
+  it("lists a Landed Run's files with added and removed counts, each expanding to its diff, and links to the Canvas at that version", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue((run) => run.writeFile("features/snow/snow.js", "one\ntwo\n"));
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    agent.enqueue(async (run) => {
+      await run.writeFile("features/snow/snow.js", "one\n2\nthree\n");
+      await run.writeFile("features/snow/snow.css", "body {}\n");
+    });
+    const run = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "more snow" })).id);
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${run.id}`);
+
+    const files = page.getByTestId("files").locator(".file");
+    await expect.poll(() => files.locator(".path").allTextContents(), { timeout: 10_000 }).toEqual(["features/snow/snow.css", "features/snow/snow.js"]);
+    const snow = files.nth(1);
+    expect(await snow.locator(".additions").textContent()).toBe("+2");
+    expect(await snow.locator(".removals").textContent()).toBe("−1");
+    const diff = snow.locator(".diff");
+    expect(await diff.isVisible()).toBe(false);
+    await snow.locator(".path").click();
+    expect(await diff.isVisible()).toBe(true);
+    expect(await diff.locator(".line.added").allTextContents()).toEqual(["+2", "+three"]);
+    expect(await diff.locator(".line.removed").allTextContents()).toEqual(["-two"]);
+
+    const link = page.getByRole("link", { name: "View the Canvas at this version" });
+    expect(await link.getAttribute("href")).toBe(`${platform.canvasUrl}/@${run.commit}/`);
+    await link.click();
+    await page.waitForURL(`${platform.canvasUrl}/@${run.commit}/`);
+  });
+
+  it("has no Canvas link while a Run isn't Landed", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue(() => {
+      throw new Error("Claude gave up");
+    });
+    const run = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${run.id}`);
+    await expect.poll(() => page.getByTestId("run").getAttribute("data-state"), { timeout: 10_000 }).toBe("rejected");
+    expect(await page.getByRole("link", { name: "View the Canvas at this version" }).count()).toBe(0);
+  });
 });

@@ -207,9 +207,9 @@ export class CanvasRepository {
     }
   }
 
-  /** What `commit` changed, as a unified diff. */
+  /** What `commit` changed, as a unified diff, with renames shown as a deletion and an addition. */
   diff(commit: string): Promise<string> {
-    return git(this.dir, ["show", "--format=", "--no-color", commit]);
+    return git(this.dir, ["show", "--format=", "--no-color", "--no-renames", commit]);
   }
 
   /** The changes `git log <args>` lists, newest first. */

@@ -160,6 +160,23 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`/api/history` is still served for tests and the harness, but the Console doesn't use it** (ticket 01). Removing it means moving those tests to `/api/runs`.
 - **Test pitfalls** (ticket 01): in Playwright, `getByRole("button", { name: "Replay" })` also matches "Yes, replay", so use `exact: true`. A test committing straight into the Canvas repo must pass `-c user.name=… -c user.email=…`, since the platform's git identity comes from environment variables the test's `git` doesn't get.
 
+## Run page
+
+- **The Run page is `src/run-page.html`, served at `GET /runs/<id>`** (Prompts list ticket 02): 200 for a known id, 404 otherwise, same page showing "No such Run". It fetches the Run from `/api/runs/<id>`, follows `/api/live`, and refetches the whole Run on every `snapshot` (open and reconnect).
+- **`Runs.get(id)` also accepts the commit of a Landed Run** (ticket 02), so both Run ids and commit hashes work, and a Replay's or Rollback's original links to `/runs/<original.commit>`.
+- **The Run page refuses cross-origin requests (403) except top-level navigation (`sec-fetch-mode: navigate`, `sec-fetch-dest: document`), and forbids framing (`frame-ancestors 'none'`, `X-Frame-Options: DENY`)** (ticket 02). Canvas code can't fetch or embed it, but shared links open from anywhere. Its data still comes only from `/api/*`. The Console's `/` page has no frame protection yet and could take the same headers.
+- **Code shared by Console pages lives in `src/console-shared.js`, served as `/console-shared.js`** (ticket 02): `MODELS`, `fillModels`, `modelName`, `runUrl`, `connectLive`, `pausable`, `followSpending`, and `actionsFor(run, {defaultModel, onQueued})` for Replay/Roll back with confirmations. New Console pages import it rather than copying.
+- **A Prompts list entry opens its Run page on a click anywhere except a `button`, `select`, `a` or `.confirm`; the shortened Prompt is also an `<a class="open">` link** (ticket 02).
+- **The Run page's log and changed-files sections are separate objects, `logSection` (`#log .body`) and `filesSection` (`#files .body`), each with `render(run)` and `live(message)`** (ticket 02). `live` receives every live message for this Run.
+- **After queueing a Replay or Rollback from the Run page, the status line links to the new Run's page** (ticket 02).
+- **In-progress file names are `RunView.editing?: string[]`, in first-edit order, saved to the Run store as each appears** (Prompts list ticket 04), so they survive reloads and restarts; a resumed Run keeps its earlier names. `editing` stays out of `RunSummary`.
+- **Live message `{type:"files", runId, files}` carries every name so far and is sent only when a new name appears** (ticket 04).
+- **`GET /api/runs/:id` returns `files: ChangedFile[]` = `{path, added?, removed?, diff?}`** (ticket 04): names only while in progress (and for non-Landed Runs until ticket 05); for Landed Runs, one entry per file from `repo.diff(commit)` with counts and its part of the diff. `changedFilesOf(run, repo)` and `changedFiles(diff)` live in `src/changed-files.ts`; `changedFiles` splits any unified diff, so saved diffs can reuse it.
+- **`CanvasRepository.diff()` passes `--no-renames`**, so a rename shows as delete plus add (ticket 04). Per-file path parsing depends on it; Rollback instructions use the same diff.
+- **Run page files markup** (ticket 04): `.file` with `.path`, `.additions` (`+N`) and `.removals` (`−N`, a real minus sign); Landed files are `<details>` expanding to `pre.diff` with `.line.{added|removed|hunk|meta|context}`. `changedFilesList(files, {finished})` draws them; an empty list says "No changes" when finished, "No files edited yet" while in progress. When a `run` message says the Run finished, the page refetches it.
+- **"View the Canvas at this version" is built from the Console's host plus the Canvas port from `GET /api/canvas` (`{port}`, cross-origin refused)** (ticket 04). The port is the `canvasPublicPort` option (env `CANVAS_PUBLIC_PORT`, set in `docker-compose.yml` to `${CANVAS_PORT:-3001}`), else the listening port. `createConsoleServer` needs `canvasPort: () => number`. The link assumes the Canvas is on the same host as the Console and appears only on Landed Runs.
+- **Playwright: use `exact: true` for "Replay" and "Roll back"** (ticket 02); the Run page also has a "Replay of Bob's …" link.
+
 ## Look and feel
 
 - **The platform pages use the Tokyo Night (Night) palette, dark only for now** (user, 2026-10-31). The Console, Run page and Canvas banner/notice take every colour from one palette file of named variables, so the palette can be swapped by editing that file; a light theme (Tokyo Night Day) would just be a second set of values.

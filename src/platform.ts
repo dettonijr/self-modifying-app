@@ -22,6 +22,12 @@ export interface PlatformOptions {
   /** 0 picks a random free port. */
   consolePort?: number;
   canvasPort?: number;
+  /**
+   * The port Players' browsers reach the Canvas on, for links to it from the
+   * Console; the port it listens on if omitted. Differs when Docker publishes
+   * it on another port.
+   */
+  canvasPublicPort?: number;
   /** Spending cap in US dollars; `DEFAULT_SPENDING_CAP_USD` if omitted. */
   spendingCapUsd?: number;
   /** How many Runs may be in progress at once to start with; `DEFAULT_MAX_PARALLEL_RUNS` if omitted. The host can change it with `set-parallel-runs`. */
@@ -52,7 +58,8 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
     maxParallelRuns: () => currentMaxParallelRuns(options.dataDir, options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS),
   });
 
-  const consoleServer = createConsoleServer({ runs, repo, budget });
+  let canvasPort = 0;
+  const consoleServer = createConsoleServer({ runs, repo, budget, canvasPort: () => options.canvasPublicPort ?? canvasPort });
   const channel = new CanvasChannel({
     greeting: async () => ({
       type: "hello",
@@ -71,7 +78,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
   const canvasServer = createCanvasServer({ repo, channel, store });
   await runs.resume();
   const consolePort = await listen(consoleServer, options.consolePort ?? 0, host);
-  const canvasPort = await listen(canvasServer, options.canvasPort ?? 0, host);
+  canvasPort = await listen(canvasServer, options.canvasPort ?? 0, host);
 
   return {
     consolePort,

@@ -44,6 +44,8 @@ export interface RunView {
   time?: string;
   /** What the Agent has reported so far, oldest first (the latest `MAX_PROGRESS_EVENTS`). */
   progress: RunProgress[];
+  /** The files the Agent has edited so far, from its progress events, in the order first edited. Saved with the Run. */
+  editing?: string[];
   /** What Claude said and what the platform did, oldest first. Every entry is kept, with no limit. */
   log: LogEntry[];
 }
@@ -58,9 +60,9 @@ export interface LogEntry {
 
 /**
  * What the Prompts list shows about a Run: everything but its progress and
- * log (and, later, its changed files), which only the Run's own endpoint serves.
+ * the files it's editing and its log, which only the Run's own endpoint serves.
  */
-export type RunSummary = Omit<RunView, "progress" | "log">;
+export type RunSummary = Omit<RunView, "progress" | "editing" | "log">;
 
 export interface RunProgress {
   message: string;
@@ -75,6 +77,8 @@ export type RunsEvent =
   | { type: "run"; run: RunSummary }
   /** The Agent reported progress on a Run. */
   | ({ type: "progress"; runId: string } & RunProgress)
+  /** The files a Run in progress is editing changed: all of them, in the order first edited. */
+  | { type: "files"; runId: string; files: string[] }
   /** A new entry at the end of a Run's log. */
   | { type: "log"; runId: string; entry: LogEntry };
 
@@ -521,6 +525,11 @@ export class Runs {
         run.progress.push(progress);
         if (run.progress.length > MAX_PROGRESS_EVENTS) run.progress.shift();
         this.publish({ type: "progress", runId: run.id, ...progress });
+        if (event.file !== undefined && !run.editing?.includes(event.file)) {
+          run.editing = [...(run.editing ?? []), event.file];
+          this.store.save(run);
+          this.publish({ type: "files", runId: run.id, files: [...run.editing] });
+        }
       }
       if (event.type === "message" && event.text.trim() !== "") this.log(run, "claude", event.text);
       if (event.type === "result") return event.outcome === "failure" ? event.error : undefined;
@@ -535,11 +544,16 @@ function needsResolving(result: LandResult): result is LandResult & { landed: fa
 }
 
 function copy(run: RunView): RunView {
-  return { ...run, progress: run.progress.map((progress) => ({ ...progress })), log: run.log.map((entry) => ({ ...entry })) };
+  return {
+    ...run,
+    progress: run.progress.map((progress) => ({ ...progress })),
+    log: run.log.map((entry) => ({ ...entry })),
+    ...(run.editing && { editing: [...run.editing] }),
+  };
 }
 
 function summary(run: RunView): RunSummary {
-  const { progress: _progress, log: _log, ...rest } = run;
+  const { progress: _progress, editing: _editing, log: _log, ...rest } = run;
   return { ...rest, ...(run.original && { original: { ...run.original } }) };
 }
 
