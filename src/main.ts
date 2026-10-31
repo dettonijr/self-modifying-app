@@ -1,9 +1,9 @@
-import { unavailableAgent } from "./agent.ts";
+import { agentFromEnvironment } from "./claude-agent.ts";
 import { startPlatform } from "./platform.ts";
 
 const platform = await startPlatform({
   dataDir: process.env.DATA_DIR ?? "./data",
-  agent: unavailableAgent,
+  agent: agentFromEnvironment(process.env),
   host: process.env.HOST ?? "0.0.0.0",
   consolePort: Number(process.env.CONSOLE_PORT ?? 3000),
   canvasPort: Number(process.env.CANVAS_PORT ?? 3001),
