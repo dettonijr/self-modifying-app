@@ -4,6 +4,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
+import { changedFilesOf } from "./changed-files.ts";
 import { isCrossOrigin, readJson, sendJson } from "./http.ts";
 import { ChangeRefused, type Runs, type RunView } from "./runs.ts";
 
@@ -16,8 +17,8 @@ const REFUSAL_STATUS: Record<ChangeRefused["reason"], number> = { invalid: 400, 
  * Serves the Console UI and the Console API, including `/api/live`: a
  * WebSocket that sends a `snapshot` on connecting, then every `RunsEvent`.
  */
-export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository; budget: Budget }): Server {
-  const { runs, repo, budget } = options;
+export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository; budget: Budget; canvasPort: () => number }): Server {
+  const { runs, repo, budget, canvasPort } = options;
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://console");
@@ -67,7 +68,13 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       const runMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
       if (runMatch && req.method === "GET") {
         const run = runs.get(decodeURIComponent(runMatch[1]));
-        return run ? sendJson(res, 200, run) : sendJson(res, 404, { error: "No such Run" });
+        if (!run) return sendJson(res, 404, { error: "No such Run" });
+        const { editing: _editing, ...view } = run;
+        return sendJson(res, 200, { ...view, files: await changedFilesOf(run, repo) });
+      }
+      if (url.pathname === "/api/canvas" && req.method === "GET") {
+        // The Canvas is on the same host as the Console, on its own port (docs/adr/0004).
+        return sendJson(res, 200, { port: canvasPort() });
       }
       if (url.pathname === "/api/spending" && req.method === "GET") {
         return sendJson(res, 200, budget.spending());

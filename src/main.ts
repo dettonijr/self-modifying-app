@@ -9,6 +9,7 @@ const platform = await startPlatform({
   host: process.env.HOST ?? "0.0.0.0",
   consolePort: Number(process.env.CONSOLE_PORT ?? 3000),
   canvasPort: Number(process.env.CANVAS_PORT ?? 3001),
+  canvasPublicPort: process.env.CANVAS_PUBLIC_PORT ? Number(process.env.CANVAS_PUBLIC_PORT) : undefined,
   spendingCapUsd: configuredCapUsd(),
   maxParallelRuns: maxParallelRunsFromEnvironment(),
 });
