@@ -11,3 +11,7 @@ Default five-role vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `
 ### Domain docs
 
 Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root, created only when they're first needed. See `docs/agents/domain.md`.
+
+## Decisions log
+
+Details that matter later (constraints, conventions, known limitations) go in `DECISIONS.md` at the repo root.
