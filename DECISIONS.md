@@ -202,6 +202,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The Run page holds live messages that arrive while it's fetching the Run, then handles them in order; the log section skips entries it already shows (same time, source and text)** (ticket 03). This also fixed a ticket 02 bug where such messages were dropped and the page got stuck. Log markup: `ol.entries > li[data-source]` with `time[datetime]`, `.source`, `.text`. Selectors for the Run's own time must be scoped (`.details time`).
 - **The real-Claude smoke test also checks that Claude's messages reach the log** (ticket 03); it hasn't been run since this change.
 
+- **The log will also show Claude's thinking summaries and its tool calls (name and target only, never output), with filter chips Platform · Claude · Thinking · Tools** (user, 2026-10-31; `.scratch/log-thinking-and-tools/`). This supersedes "no tool-call output". Raw thinking is never returned by the API; only summaries (`thinking: {type: "adaptive", display: "summarized"}`) are available.
 ## Look and feel
 
 - **The platform pages use the Tokyo Night (Night) palette, dark only for now** (user, 2026-10-31). The Console, Run page and Canvas banner/notice take every colour from one palette file of named variables, so the palette can be swapped by editing that file; a light theme (Tokyo Night Day) would just be a second set of values.
