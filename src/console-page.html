@@ -176,7 +176,8 @@
       const prompt = document.createElement("q");
       prompt.textContent = run.prompt;
       if (run.kind === "Replay") item.append("↻ ");
-      item.append(who, ": ", prompt);
+      if (run.kind === "Rollback") item.append("↩ ");
+      item.append(who, run.kind === "Rollback" ? " rolls back " : ": ", prompt);
       return item;
     }
 
@@ -216,6 +217,8 @@
 
     // The history entry whose "Fix it to this!" confirmation is open, kept across refreshes.
     let confirmingReplay;
+    // The same for a Rollback's confirmation.
+    let confirmingRollback;
 
     async function refreshHistory() {
       const response = await fetch("/api/history");
@@ -231,15 +234,16 @@
           const time = document.createElement("time");
           time.dateTime = change.time;
           time.textContent = new Date(change.time).toLocaleString();
-          if (change.kind === "Replay" && change.original) {
+          if ((change.kind === "Replay" || change.kind === "Rollback") && change.original) {
             const originalWho = document.createElement("strong");
             originalWho.textContent = change.original.nickname;
             const reference = document.createElement("code");
             reference.className = "original";
             reference.textContent = change.original.commit.slice(0, 7);
-            reference.title = `Replay of ${change.original.commit}`;
+            reference.title = `${change.kind} of ${change.original.commit}`;
             item.dataset.original = change.original.commit;
-            item.append("↻ ", who, " replayed ", originalWho, "'s ", prompt, " ", reference, " ", time);
+            const [mark, verb] = change.kind === "Replay" ? ["↻ ", " replayed "] : ["↩ ", " rolled back "];
+            item.append(mark, who, verb, originalWho, "'s ", prompt, " ", reference, " ", time);
           } else {
             item.append(who, ": ", prompt, " ", time);
           }
@@ -249,11 +253,21 @@
           fix.type = "button";
           fix.textContent = "Fix it to this!";
           fix.addEventListener("click", () => {
+            confirmingRollback = undefined;
             confirmingReplay = change.commit;
             showReplayConfirmation(change, actions);
           });
-          actions.append(fix);
+          const rollback = document.createElement("button");
+          rollback.type = "button";
+          rollback.textContent = "Roll back";
+          rollback.addEventListener("click", () => {
+            confirmingReplay = undefined;
+            confirmingRollback = change.commit;
+            showRollbackConfirmation(change, actions);
+          });
+          actions.append(fix, rollback);
           if (confirmingReplay === change.commit) showReplayConfirmation(change, actions);
+          if (confirmingRollback === change.commit) showRollbackConfirmation(change, actions);
           item.append(actions);
           return item;
         }),
@@ -295,6 +309,40 @@
         setStatus(body.state === "waiting" ? "Your Replay is in the queue…" : "Claude is working on your Replay…");
       });
       confirm.append(question, " ", model, " ", go, " ", cancel);
+      actions.append(confirm);
+    }
+
+    /** Asks before a Rollback starts. */
+    function showRollbackConfirmation(change, actions) {
+      actions.querySelector(".confirm")?.remove();
+      const confirm = document.createElement("span");
+      confirm.className = "confirm rollback";
+      const question = document.createElement("span");
+      question.textContent = `Roll back ${change.nickname}'s change? Everything that Landed after it is kept.`;
+      const go = document.createElement("button");
+      go.type = "button";
+      go.textContent = "Yes, roll back";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Keep it";
+      const close = () => {
+        confirmingRollback = undefined;
+        confirm.remove();
+      };
+      cancel.addEventListener("click", close);
+      go.addEventListener("click", async () => {
+        close();
+        const response = await fetch("/api/rollbacks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ commit: change.commit }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) return setStatus(body.error ?? "The Rollback was refused", true);
+        myRuns.add(body.id);
+        setStatus(body.state === "waiting" ? "Your Rollback is in the queue…" : "Rolling it back…");
+      });
+      confirm.append(question, " ", go, " ", cancel);
       actions.append(confirm);
     }
 

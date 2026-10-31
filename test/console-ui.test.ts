@@ -89,6 +89,33 @@ describe("Console UI", () => {
     expect(await (await platform.fetchCanvas("/")).text()).toContain("<h1>Snowing</h1>");
   });
 
+  it("Rolls back a change from the history only after the Player confirms, and lists the Rollback", async () => {
+    const { page, platform, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
+    const snowRun = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const history = page.getByTestId("history");
+    await page.reload();
+    const snow = history.locator("li", { hasText: "make it snow" });
+    await snow.waitFor();
+
+    await snow.getByRole("button", { name: "Roll back" }).click();
+    expect(await snow.textContent()).toContain("Roll back Bob's change?");
+    await snow.getByRole("button", { name: "Keep it" }).click();
+    expect(await snow.getByRole("button", { name: "Yes, roll back" }).count()).toBe(0);
+    expect(await history.locator("li").count()).toBe(1);
+
+    await snow.getByRole("button", { name: "Roll back" }).click();
+    await snow.getByRole("button", { name: "Yes, roll back" }).click();
+    await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
+    const entry = history.locator("li").first();
+    expect(await entry.textContent()).toContain("Alice rolled back Bob's");
+    expect(await entry.textContent()).toContain("make it snow");
+    expect(await entry.textContent()).toContain(snowRun.commit!.slice(0, 7));
+    expect(await entry.getByRole("button", { name: "Roll back" }).count()).toBe(1);
+    expect(await entry.getByRole("button", { name: "Fix it to this!" }).count()).toBe(1);
+    expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
+  });
+
   it("shows the running cost live to everyone, and the paused state once the spending cap is reached", async () => {
     const { page, platform, agent } = await open(new FakeAgent(), { spendingCapUsd: 2 });
     const watcher = await (await browser.newContext()).newPage();

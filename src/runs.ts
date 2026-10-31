@@ -7,6 +7,7 @@ import type { CanvasRepository, ChangeKind, ChangeMetadata, OriginalChange, Work
 import type { Lander, LandResult } from "./lander.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
 import { replayInstructions } from "./replay.ts";
+import { rollbackInstructions, rollbackIntent } from "./rollback.ts";
 import type { RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
@@ -44,7 +45,7 @@ export interface RunView {
   model: Model;
   /** What kind of change the Run makes; a Player's own Prompt if absent. */
   kind?: ChangeKind;
-  /** The earlier change a Replay re-applies; `prompt` is that change's Prompt. */
+  /** The earlier change a Replay re-applies or a Rollback undoes; `prompt` is that change's Prompt. */
   original?: OriginalChange;
   /** Why the Run was rejected. */
   error?: string;
@@ -86,6 +87,12 @@ export interface PromptRequest {
   nickname: unknown;
   prompt: unknown;
   model?: unknown;
+}
+
+/** Undo the change that Landed as `commit`, keeping what Landed after it. */
+export interface RollbackRequest {
+  nickname: unknown;
+  commit: unknown;
 }
 
 /** "Fix it to this!": send the Prompt of the change that Landed as `commit` again. */
@@ -169,6 +176,30 @@ export class Runs {
       prompt: original.prompt,
       model,
       kind: "Replay",
+      original: { commit: original.commit, nickname: original.nickname },
+      progress: [],
+    });
+  }
+
+  /**
+   * Queues a Rollback of a change in the history, or throws `PromptRefused`.
+   * It follows the same rules as a Prompt, including the one waiting slot.
+   */
+  async rollback(request: RollbackRequest): Promise<RunView> {
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    const nickname = validNickname(request.nickname);
+    if (nickname === undefined) throw new PromptRefused("invalid", "Pick a nickname first");
+    const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
+    if (original === undefined) throw new PromptRefused("not-found", "There's no such change in the history");
+    // Checked again: the cap may have been reached while the history was read.
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    return this.enqueue({
+      id: randomUUID(),
+      state: "waiting",
+      nickname,
+      prompt: original.prompt,
+      model: DEFAULT_MODEL,
+      kind: "Rollback",
       original: { commit: original.commit, nickname: original.nickname },
       progress: [],
     });
@@ -365,10 +396,16 @@ export class Runs {
     }
   }
 
-  /** Lets the Agent do the Run's work in the worktree, then Lands it. */
+  /**
+   * Lets the Agent do the Run's work in the worktree, then Lands it. A
+   * Rollback is first tried as a mechanical revert, and only needs the Agent
+   * if that conflicts.
+   */
   private async workOnce(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
-    const failure = await this.runAgent(run, worktree, signal, await this.instructions(run, worktree), run.model);
-    if (failure !== undefined) return { landed: false, reason: failure };
+    if (!(run.kind === "Rollback" && run.original && (await this.repo.revert(worktree, run.original.commit)))) {
+      const failure = await this.runAgent(run, worktree, signal, await this.instructions(run, worktree), run.model);
+      if (failure !== undefined) return { landed: false, reason: failure };
+    }
     this.setState(run, "landing");
     return this.lander.land(worktree, this.change(run));
   }
@@ -406,21 +443,26 @@ export class Runs {
       problem = { kind: "render", problem: failed.problem ?? "unknown" };
     }
     const collided = await this.repo.changesBetween(worktree.base, onto, problem.kind === "conflict" ? conflicts : undefined);
-    const instructions = resolutionInstructions({ prompt: run.prompt, problem, collided });
+    const instructions = resolutionInstructions({ prompt: this.intent(run), problem, collided });
     if ((await this.runAgent(run, worktree, signal, instructions, RESOLUTION_MODEL)) !== undefined) return false;
     return !(await hasConflictMarkers(worktree.dir, conflicts));
   }
 
   /**
-   * What the Agent is asked to do: the Prompt itself, or for a Replay, the
-   * original change and the Prompts that Landed since, as of the worktree's base.
+   * What the Agent is asked to do: the Prompt itself, or for a Replay or a
+   * Rollback, the original change and the Prompts that Landed since, as of the worktree's base.
    */
   private async instructions(run: RunView, worktree: Worktree): Promise<string> {
-    if (run.kind !== "Replay" || !run.original) return run.prompt;
+    if ((run.kind !== "Replay" && run.kind !== "Rollback") || !run.original) return run.prompt;
     const original = await this.repo.landedChange(run.original.commit);
-    if (!original) throw new Error(`The replayed change ${run.original.commit} is no longer in the history`);
+    if (!original) throw new Error(`The original change ${run.original.commit} is no longer in the history`);
     const [diff, since] = await Promise.all([this.repo.diff(original.commit), this.repo.changesBetween(original.commit, worktree.base)]);
-    return replayInstructions({ original, diff, since });
+    return run.kind === "Replay" ? replayInstructions({ original, diff, since }) : rollbackInstructions({ original, diff, since });
+  }
+
+  /** What the Run is for, in words the resolving Agent can act on. */
+  private intent(run: RunView): string {
+    return run.kind === "Rollback" && run.original ? rollbackIntent({ ...run.original, prompt: run.prompt }) : run.prompt;
   }
 
   private change(run: RunView): ChangeMetadata {

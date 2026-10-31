@@ -52,6 +52,17 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
           return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
         }
       }
+      if (url.pathname === "/api/rollbacks" && req.method === "POST") {
+        const body = await readJson(req);
+        if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
+        try {
+          const run = await runs.rollback({ nickname: cookie(req, "nickname"), commit: body.commit });
+          return sendJson(res, 202, run);
+        } catch (error) {
+          if (!(error instanceof PromptRefused)) throw error;
+          return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
+        }
+      }
       const runMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
       if (runMatch && req.method === "GET") {
         const run = runs.get(decodeURIComponent(runMatch[1]));
