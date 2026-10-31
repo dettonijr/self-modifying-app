@@ -3,6 +3,7 @@ import { CanvasChannel } from "./canvas-channel.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { createCanvasServer } from "./canvas-server.ts";
 import { close, listen } from "./http.ts";
+import { KeyValueStore } from "./key-value-store.ts";
 
 export type RenderResult = { rendered: true } | { rendered: false; problem: string };
 
@@ -26,9 +27,11 @@ export class RenderCheck {
 
   async check(commit: string): Promise<RenderResult> {
     // A private Canvas server on a random loopback port, with its own channel
-    // so the check never shows up as a viewer of the live Canvas.
+    // so the check never shows up as a viewer of the live Canvas, and an empty
+    // in-memory store, so the candidate's code can't change the features' real data.
     const channel = new CanvasChannel({ greeting: async () => ({ type: "hello", commit, running: [] }) });
-    const server = createCanvasServer({ repo: this.repo, channel });
+    const store = new KeyValueStore(":memory:");
+    const server = createCanvasServer({ repo: this.repo, channel, store });
     const port = await listen(server, 0, "127.0.0.1");
     const context = await (await this.launch()).newContext();
     try {
@@ -50,6 +53,7 @@ export class RenderCheck {
     } finally {
       await context.close();
       await close(server);
+      store.close();
     }
   }
 
