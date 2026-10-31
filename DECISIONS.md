@@ -67,6 +67,18 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`playwright` is a runtime dependency, `ws` a dependency, `@types/ws` a dev dependency** (merge of 05 and 07).
 - **Harness: `platform.live()` returns a WebSocket client with `messages` and `waitFor(match)`** (ticket 05).
 
+## Platform services
+
+- **Canvas code imports `{ channel, store }` from `/__platform/services.js`** (ticket 11; source `src/canvas-services.js`, which Claude can't edit). `channel(feature)` has `.send(msg)` and `.onMessage(fn)` (returns an unsubscribe function). `store(feature)` has `.get(key)` (`undefined` if missing), `.set(key, value)`, `.delete(key)` and `.list(prefix)` (returns `[{key, value}]` sorted by key). Values are any JSON. The feature name is the feature's folder name and must match `^[a-z0-9][a-z0-9_-]{0,63}$`.
+- **Server API under `/__platform/`** (ticket 11, `src/platform-services.ts`): `POST channel/<feature>` with `{message}`; `GET|PUT|DELETE store/<feature>/<url-encoded key>` (`PUT` takes `{value}`, `GET` returns `{value}` or 404); `GET store/<feature>/?prefix=` returns `{entries}`. Every route refuses other origins with 403. Only `GET`/`HEAD` reach the rest of the Canvas server.
+- **Limits: messages 16 KB, values 64 KB, keys 256 characters** (ticket 11).
+- **Feature messages travel on the same SSE stream with event name `feature`**, data `{feature, message}` (ticket 11). They reach every viewer, the sender included, and aren't stored: a viewer only gets messages sent while their page is open.
+- **One event connection per page** (ticket 11): the platform script exposes its EventSource as `window.__platformEvents` and the client library reuses it.
+- **The key-value store uses Node's built-in `node:sqlite`, in `<data>/services.sqlite` (WAL mode), outside the Canvas repo** (ticket 11), so Land, Rollback and Replay never touch it. No new dependency; Node prints a one-time `ExperimentalWarning` at startup. Ticket 13 can reuse `node:sqlite` for the queue.
+- **There are no atomic operations, so a concurrent `get` then `set` can lose an update** (ticket 11). The Canvas `CLAUDE.md` tells Claude to use one key per contribution plus `list()` for tallies. An `increment` operation could be added later if needed.
+- **Each render check gets its own channel and an empty in-memory store** (ticket 11), so a candidate page can't change real data. Features see no stored data during the check, which is fine because a feature's own errors don't fail it.
+- **`readJson(req, maxBytes)` and `sendJson` live in `http.ts`** (ticket 11) for reuse by any server.
+
 ## Spending cap
 
 - **Prices live only in `PRICES` in `src/budget.ts`** (ticket 12), in US dollars per million tokens, taken from the claude-api skill on 2026-10-31: Sonnet 5.5 costs $2 input and $10 output, Opus 5.5 costs $4 and $20. The cost counts input and output tokens only; if the Agent starts reporting cache tokens, extend `TokenUsage` and `PRICES` together.
