@@ -45,6 +45,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The reload notice survives the reload through `sessionStorage`** and shows for 6 seconds (ticket 04).
 - **Known limitation: if a Land deletes the page a viewer is on, the reload ends at a 404** (ticket 04).
 
+- **"View the Canvas at this version" will open a pinned, read-only view at `/@<commit>/?version`** (user, 2026-10-31; ticket `.scratch/log-thinking-and-tools/issues/02`). Found bug: the injected script's catch-up (`hello` with a different commit) and reload-on-Land bounced old versions straight back to live. Pinned views don't follow live, show "Older version: view only · Go to the live Canvas" from the current injected script (so it works on versions older than the feature), see live data, and can't write: the services library drops writes and the server refuses store writes and channel sends whose `Referer` is a pinned address. Separate origin for old versions rejected as overkill. Accepted limits: code stripping `Referer`; the brief old-code window in normal tabs between a Land and reload.
 ## Landing
 
 - **The Lander lands one Run at a time, in the order Runs reach `land()`, using a chain of promises** (ticket 06). Each Land: commit the worktree, read the current `main`, rebase with `CanvasRepository.rebaseWorktree(worktree, onto)`, run the render check, then move `main` with the compare-and-swap, expecting the `main` it rebased onto.
