@@ -9,7 +9,7 @@ Either way, it goes through the normal Landing path, including conflict handling
 
 **Blocked by:** 08
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Rollback asks for confirmation in the Console
 - [ ] A clean revert Lands, and later changes are kept

@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Token usage reported by the fake Agent turns into the correct cost for each model
 - [ ] The Console shows the running total live

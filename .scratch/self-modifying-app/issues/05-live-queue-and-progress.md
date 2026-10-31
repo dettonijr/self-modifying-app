@@ -12,7 +12,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A second Prompt from another Player waits in the queue and runs after the first one Lands
 - [ ] A second waiting Prompt from the same Player is rejected with a clear message; once the first starts running, the Player can send again

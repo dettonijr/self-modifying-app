@@ -6,7 +6,7 @@ Only one Run happens at a time here; queueing and parallel Runs come later. A Pr
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The Console asks for a nickname on first visit, stores it in a cookie and allows changing it
 - [ ] The Prompt box enforces the 500-character limit with a visible counter, and the API also rejects longer Prompts

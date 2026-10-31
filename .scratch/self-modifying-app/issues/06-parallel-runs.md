@@ -9,7 +9,7 @@
 
 **Blocked by:** 05
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] With the limit at 3, a 4th Prompt waits, and starts when one Run finishes
 - [ ] Two parallel Runs editing different features both Land, and the final Canvas contains both changes. The test holds one fake Agent until the other Run has Landed.

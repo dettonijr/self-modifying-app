@@ -20,7 +20,7 @@ The stack is TypeScript on Node, with Vitest and Playwright.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] `docker compose up` starts the platform, with the Console and Canvas reachable from another device on the network
 - [ ] The first start creates the Canvas repo with the starter Canvas; later starts reuse it

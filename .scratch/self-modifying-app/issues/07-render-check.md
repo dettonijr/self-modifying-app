@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A fake Agent edit that produces a blank page doesn't Land, and `main` is unchanged
 - [ ] A fake Agent edit that throws a fatal error on load doesn't Land

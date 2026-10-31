@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Served Canvas HTML includes the platform script, even if the Canvas's own files change
 - [ ] A connected viewer receives a "Run started" event with the nickname and shows the banner

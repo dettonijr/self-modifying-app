@@ -13,7 +13,7 @@ The Anthropic API key comes from an environment variable and is never written to
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] With an API key set, a real Prompt from the Console changes the Canvas and Lands
 - [ ] The Agent can't run shell commands, use the network, or read or write outside its worktree

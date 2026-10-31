@@ -4,7 +4,7 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] After a restart, waiting Prompts are still queued in the same order
 - [ ] Runs that were in progress before the restart start again on the latest `main` and can Land

@@ -10,7 +10,7 @@ so both intentions are respected. Conflict resolution always uses Sonnet 5.5. Th
 
 **Blocked by:** 06, 07
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Conflicting Runs: when the fake Agent resolves the conflict, the second Run Lands with both changes
 - [ ] The resolution request includes the Run's Prompt and the Prompts of the conflicting commits

@@ -9,7 +9,7 @@ Stored data isn't versioned with the Canvas, so it survives Landing, Rollback an
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A message sent on a feature channel by one viewer reaches another viewer
 - [ ] Key-value entries can be read and written per feature, and features can't overwrite each other's keys by accident

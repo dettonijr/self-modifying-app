@@ -11,7 +11,7 @@ It goes through the normal Landing path, uses up the Player's waiting slot and i
 
 **Blocked by:** 08
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Replay asks for confirmation and lets the Player choose the model
 - [ ] The fake Agent receives the original Prompt, the original diff and the later Prompts in its instructions
