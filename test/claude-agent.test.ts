@@ -80,6 +80,20 @@ describe("The Claude Agent", () => {
     expect(JSON.stringify(options.systemPrompt)).toContain("One folder per feature.");
   });
 
+  it("tells Claude every change must work on phones", async () => {
+    const worktree = await tempWorktree();
+    const { query, calls } = fakeQuery(async function* () {
+      yield success();
+    });
+
+    await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    const { append } = calls[0].options.systemPrompt as { append: string };
+    for (const rule of ["phone", "sideways", "pointer events", "hover", "44", '<meta name="viewport"']) {
+      expect(append).toContain(rule);
+    }
+  });
+
   it("offers only file tools: no shell, no network, no subagents, and no settings, hooks or MCP from disk", async () => {
     const worktree = await tempWorktree();
     const { query, calls } = fakeQuery(async function* () {

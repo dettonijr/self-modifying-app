@@ -1,4 +1,4 @@
-import { chromium, type Browser } from "playwright";
+import { chromium, type Browser, type BrowserContextOptions } from "playwright";
 import { CanvasChannel } from "./canvas-channel.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { createCanvasServer } from "./canvas-server.ts";
@@ -15,7 +15,8 @@ const LOAD_TIMEOUT_MS = 10_000;
  * renders: the entry page loads, its own scripts don't throw (a fatal error)
  * and the page isn't blank. It deliberately doesn't test individual features:
  * an error thrown by a feature's own files breaks only that feature, so it
- * doesn't count. Chromium starts on the first check and is reused until `close`.
+ * doesn't count. The page is loaded at desktop size, then at phone size with
+ * touch; failing either fails the check. Chromium starts on the first check and is reused until `close`.
  */
 export class RenderCheck {
   private readonly repo: CanvasRepository;
@@ -33,11 +34,25 @@ export class RenderCheck {
     const store = new KeyValueStore(":memory:");
     const server = createCanvasServer({ repo: this.repo, channel, store, anyCommit: true });
     const port = await listen(server, 0, "127.0.0.1");
-    const context = await (await this.launch()).newContext();
+    // The candidate's entry page, pinned to its commit, as the Canvas server serves every page.
+    const entryPage = `http://127.0.0.1:${port}/@${commit}/`;
+    try {
+      for (const screen of SCREENS) {
+        const result = await this.load(entryPage, screen);
+        if (!result.rendered) return { rendered: false, problem: `${screen.name}: ${result.problem}` };
+      }
+      return { rendered: true };
+    } finally {
+      await close(server);
+      store.close();
+    }
+  }
+
+  /** Loads the entry page in a fresh browser context sized like `screen`, and checks it renders. */
+  private async load(entryPage: string, screen: Screen): Promise<RenderResult> {
+    const context = await (await this.launch()).newContext(screen.options);
     try {
       const page = await context.newPage();
-      // The candidate's entry page, pinned to its commit, as the Canvas server serves every page.
-      const entryPage = `http://127.0.0.1:${port}/@${commit}/`;
       const fatalErrors: string[] = [];
       await page.exposeFunction(REPORT_ERROR, (file: string, message: string) => {
         if (isEntryPage(file, entryPage)) fatalErrors.push(message);
@@ -52,8 +67,6 @@ export class RenderCheck {
       return { rendered: true };
     } finally {
       await context.close();
-      await close(server);
-      store.close();
     }
   }
 
@@ -68,6 +81,24 @@ export class RenderCheck {
     return this.browser;
   }
 }
+
+interface Screen {
+  /** Starts the problem description, so the Agent knows which screen failed. */
+  name: string;
+  options: BrowserContextOptions;
+}
+
+/**
+ * Every candidate must render on a desktop and on a touch phone (about an
+ * iPhone's size). Only blank pages and crashes count: an awkward layout passes.
+ */
+const SCREENS: Screen[] = [
+  { name: "On a desktop-sized screen (1280×720)", options: { viewport: { width: 1280, height: 720 } } },
+  {
+    name: "On a phone-sized screen (390×844, touch)",
+    options: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true },
+  },
+];
 
 /** The page-side hook uncaught errors are reported through. */
 const REPORT_ERROR = "__renderCheckReportError";
@@ -89,7 +120,8 @@ function isEntryPage(file: string, entryPage: string): boolean {
  */
 const IS_BLANK = `(() => {
   const body = document.body;
-  if (!body) return true;
+  // A body that isn't rendered at all (display: none) is blank, whatever its innerText says.
+  if (!body || body.getClientRects().length === 0) return true;
   if (body.innerText.trim() !== "") return false;
   const invisible = ["SCRIPT", "STYLE", "LINK", "META", "TEMPLATE", "NOSCRIPT"];
   for (const element of body.querySelectorAll("*")) {

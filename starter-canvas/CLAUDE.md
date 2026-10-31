@@ -13,6 +13,16 @@ This folder is the Canvas: a website that changes in response to Prompts sent by
 - Change other features' folders only when the Prompt is about them.
 - `index.html` is the entry page and only lists features: the title, the import map, the shared stylesheet, and one `<section id="<feature-name>" class="feature">` per feature that pulls in that feature's stylesheet and module. Don't put feature code in it.
 
+## Every change works on phones
+
+Players play on phones as well as computers, so every feature and every page must work on a phone:
+
+- Layouts fit narrow screens (from 360px wide) without scrolling sideways. Prefer flexible widths (`%`, `fr`, `min()`, `max-width: 100%`) over fixed pixel widths, and let content wrap.
+- Touch works everywhere a mouse does. Use pointer events (`pointerdown`, `pointermove`, `pointerup`) rather than mouse-only events (`mousedown`, `mousemove`, `mouseup`), and set `touch-action: none` on things you drag so the page doesn't scroll instead.
+- Nothing only works on hover. Anything shown on hover must also be reachable by tapping.
+- Tap targets (buttons, links, controls) are at least 44×44px.
+- Every page has `<meta name="viewport" content="width=device-width, initial-scale=1">` in its `<head>`.
+
 ## Shared styling through theme variables
 
 - `theme.css` defines a small set of theme variables (`--color-*`, `--font-*`, `--radius`, `--space`). Features use them rather than hard-coded colours and fonts, so the whole Canvas can be restyled in one place.
