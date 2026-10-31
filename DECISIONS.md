@@ -8,7 +8,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 
 - **TypeScript runs directly on Node, with no build step** (ticket 01). Node ≥ 22.18 strips types natively, so imports must use `.ts` extensions and only erasable TS syntax is allowed: no `enum`, no `namespace`, no parameter properties.
 - **npm, not pnpm** (ticket 01). pnpm isn't installed in the dev environment.
-- **The Docker image is the full `node:22`, not a slim variant** (ticket 01). Debian's package mirror is blocked during `docker build` in the sandbox until the host approves it, and the full image already includes git. Ticket 07 will need Chromium and its system libraries in the image, which may require that approval.
+- **The Docker image is `mcr.microsoft.com/playwright:v1.64.1-noble`** (ticket 07, replacing `node:22` from ticket 01). It ships Node 24, git, and Chromium with its system libraries. Installing those libraries on `node:22` fails because `deb.debian.org:80` needs host approval in the sandbox. `playwright` is a runtime dependency pinned to exactly `1.64.1`; it must match the image tag whenever either is upgraded.
 - **The dev machine has Chromium's system libraries and Playwright's Chromium installed** (ticket 01). Recorded in `/home/agent/.t3/notes/self-modifying-app/env.md`.
 - **The dev machine's Node can't run `.ts` files** (ticket 12). Debian's Node build has `process.features.typescript === false` (`ERR_NO_TYPESCRIPT`), so `npm start` and `node src/*.ts` fail here; they work in the `node:22` Docker image, or locally with the official Node build or `nvm`. Tests must call code in-process instead of spawning `node src/*.ts`.
 
@@ -44,6 +44,14 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`Runs.onChange(listener)` and `Runs.inProgressRuns()`** (ticket 04) drive Canvas events. `onChange` fires on running, landing, then landed/rejected (after the worktree is removed). Ticket 05's Console WebSocket can use the same hook.
 - **The reload notice survives the reload through `sessionStorage`** and shows for 6 seconds (ticket 04).
 - **Known limitation: if a Land deletes the page a viewer is on, the reload ends at a 404** (ticket 04).
+
+## Render check
+
+- **The render check is its own step in the Lander** (ticket 07): commit the worktree, run the check, then move `main`. Failures return `failure: "render"` (reason "Canvas didn't render") or `failure: "unchanged"`; ticket 08 routes on `failure`. The specific problem is only logged with `console.warn`; Players see "Canvas didn't render".
+- **The check uses a private Canvas server on a random loopback port with its own channel** (ticket 07), so it never appears as a viewer of the live Canvas. It loads `/@<commit>/`. One Chromium starts on the first check and is reused until the platform closes. Page load times out after 10s, and the page is then checked as it stands.
+- **Doesn't render means any of:** the entry page returns an error status (e.g. `index.html` deleted); the entry page's own inline scripts throw an uncaught error; or the body is blank, with no text and no visible sized element (the platform overlay sits outside `<body>` and doesn't count) (ticket 07).
+- **Errors in a feature's own files and unhandled promise rejections don't count** (ticket 07), so a broken feature that still renders Lands, as designed.
+- **Test fixtures must leave something visible in `index.html` to Land** (ticket 07); bare text like `"x"` is enough.
 
 ## Spending cap
 
