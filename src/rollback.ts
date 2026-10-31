@@ -1,11 +1,12 @@
 import type { LandedChange } from "./canvas-repository.ts";
+import { MAX_REPLAY_DIFF_LENGTH } from "./replay.ts";
 
 /**
- * What a Rollback stands for when the Agent has to do it, e.g. as "this
- * change's Prompt" in a conflict resolution.
+ * What a Rollback is for, in a sentence the Agent can act on, e.g. as "this
+ * change's Prompt" when resolving a conflict.
  */
-export function rollbackIntent(original: { commit: string; prompt: string }): string {
-  return `Roll back the change made for the Prompt "${original.prompt}" (commit ${original.commit}), keeping everything that Landed after it.`;
+export function rollbackIntent(original: { commit: string; nickname: string; prompt: string }): string {
+  return `Roll back ${original.nickname}'s change for the Prompt "${original.prompt}" (commit ${original.commit}), keeping everything that Landed after it.`;
 }
 
 /**
@@ -15,21 +16,25 @@ export function rollbackIntent(original: { commit: string; prompt: string }): st
  */
 export function rollbackInstructions(options: { original: LandedChange; diff: string; since: LandedChange[] }): string {
   const { original, diff, since } = options;
+  const shownDiff = diff.length > MAX_REPLAY_DIFF_LENGTH ? `${diff.slice(0, MAX_REPLAY_DIFF_LENGTH)}\n… (diff cut short)` : diff;
   const later =
     since.length === 0
       ? ["No other changes Landed after it."]
-      : ["The Prompts of the changes that Landed after it, oldest first. Keep what they did:", ...since.map((change) => `- ${change.nickname}: ${change.prompt}`)];
+      : ["The Prompts that Landed after it, oldest first. Keep what they did:", ...since.map((change) => `- ${change.nickname}: ${change.prompt}`)];
   return [
-    "Undo this change, and keep what came after.",
-    `It was made by ${original.nickname} for the Prompt below, but later changes touched the same code, so it can't be reverted mechanically.`,
-    "Remove what it added and bring back what it removed, adapting to the code as it is now. Don't undo the later changes.",
+    "This is a Rollback. Undo this change, and keep what came after.",
+    "Later changes touched the same code, so it couldn't be reverted mechanically. Remove what it added and bring back what it removed, adapting to the code as it is now.",
     "",
-    "The Prompt of the change to undo:",
+    `The Prompt of the change to undo, by ${original.nickname}:`,
     original.prompt,
     "",
-    "Its diff, for reference (the code has moved on since, so don't apply it blindly):",
-    diff,
+    "The diff of that change, for reference only. The Canvas has changed since, so don't apply it in reverse blindly:",
+    "```diff",
+    shownDiff,
+    "```",
     "",
     ...later,
+    "",
+    "Don't undo the later changes.",
   ].join("\n");
 }

@@ -52,6 +52,21 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Test pitfall: `FakeAgent` hands out scripts in the order Runs start, and worktree creation can reorder them under load** (ticket 06). Tests that hold a specific Run must wait with `agent.started(n)` before sending the next Prompt, or pick behaviour from `run.task.instructions`.
 - **Tests that assume one Run at a time set `maxParallelRuns: 1`** (ticket 06), e.g. `queue.test.ts` and `console-ui.test.ts`.
 
+## Conflict handling
+
+- **A Land that fails with `conflict` or `render` goes `resolving → landing` up to `MAX_RESOLUTION_ATTEMPTS` (2), then `restarted → landing` once in a fresh worktree on the latest `main`, then `rejected`** (ticket 08). `unchanged` and Agent failures are rejected straight away. The restart gets no resolution attempts of its own.
+- **Rejection message after a failed restart** (ticket 08): `COLLIDED_MESSAGE` for a conflict, "Canvas didn't render" for a render failure, or the Agent's own error.
+- **The flow lives in `runs.ts` (`workAndLand` → `inWorktree` / `workOnce` / `workAndResolve` / `resolve`); constants, `resolutionInstructions()` and `hasConflictMarkers()` are in `src/resolution.ts`** (ticket 08). A Run's instructions and commit metadata are set in `workOnce` / `change()`, so Rollback and Replay get resolve → restart → reject for free by giving their Runs their own instructions and metadata.
+- **Resolution always uses `RESOLUTION_MODEL` (Sonnet 5.5), and its usage goes through `Budget.record` under that model** (ticket 08).
+- **Repository methods** (ticket 08): `reopenOnto(worktree, change, onto)` resets to `onto` and reapplies the change with `cherry-pick --no-commit`, returning conflicted paths with markers kept; `head(worktree)`; `changesBetween(from, to, paths?)`, oldest first, sharing parsing with `history()`. `Worktree.base` records the commit a worktree was created from.
+- **What the resolving Agent is told** (ticket 08): for a conflict, the conflicted files, the Run's Prompt, and the nickname and Prompt of each commit since the base that touched those files; for a render failure, the problem (`LandResult.problem`) and every commit since the base.
+- **Each Land is still exactly one commit** (ticket 08): a resolution leaves the change uncommitted on top of `main`. If reapplying onto the latest `main` is clean, the Agent isn't called. A failed attempt (Agent fails, conflict markers remain, or the next Land fails) starts the next one from the last committed change.
+- **No resolution or restart starts once a Run's abort signal fires** (ticket 08), which fits restart resume.
+- **Known limitation: a Run resumed after a platform restart gets a fresh set of resolution attempts and restart** (ticket 08).
+- **The Console shows `resolving` and `restarted` like `running`, with a yellow badge** (ticket 08).
+- **Test pitfall: resolution requests use up `FakeAgent` scripts too** (ticket 08). Tell them apart by `task.instructions !== prompt`. A test expecting rejection must queue scripts for both resolutions and the restart, or the extra attempts fail with "no script queued" and the reason changes.
+- **Known flake: under full-suite load, one Playwright test in `platform-services.test.ts` once hit its 30s timeout** (ticket 08); it passed on rerun.
+
 ## Render check
 
 - **The render check is its own step in the Lander** (ticket 07): commit the worktree, run the check, then move `main`. Failures return `failure: "render"` (reason "Canvas didn't render") or `failure: "unchanged"`; ticket 08 routes on `failure`. The specific problem is only logged with `console.warn`; Players see "Canvas didn't render".

@@ -44,11 +44,12 @@ describe("Rollback", () => {
     expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(rain.commit);
 
     const history = (await (await platform.consoleApi("/api/history")).json()) as unknown[];
-    expect(history[0]).toMatchObject({ commit: finished.commit, kind: "Rollback", nickname: "Carol", prompt: "make it snow", original: snow.commit });
+    expect(history[0]).toMatchObject({ commit: finished.commit, kind: "Rollback", nickname: "Carol", prompt: "make it snow", original: { commit: snow.commit, nickname: "Alice" } });
     const trailers = git(platform, ["log", "-1", "--format=%(trailers)", finished.commit!]);
     expect(trailers).toContain("Kind: Rollback");
     expect(trailers).toContain("Nickname: Carol");
     expect(trailers).toContain(`Original: ${snow.commit}`);
+    expect(trailers).toContain("Original-Nickname: Alice");
     expect(git(platform, ["branch", "--list"])).toBe("* main");
   });
 
@@ -74,7 +75,7 @@ describe("Rollback", () => {
     // The Agent starts from the latest Canvas, with no conflict markers.
     expect(page).toBe("<h1>Rain</h1><p>Rain falls</p>");
     expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(rain.commit);
-    expect(await (await platform.consoleApi("/api/history")).json()).toMatchObject([{ kind: "Rollback", nickname: "Carol", original: snow.commit }, {}, {}]);
+    expect(await (await platform.consoleApi("/api/history")).json()).toMatchObject([{ kind: "Rollback", nickname: "Carol", original: { commit: snow.commit, nickname: "Alice" } }, {}, {}]);
     expect(git(platform, ["branch", "--list"])).toBe("* main");
   });
 
@@ -103,15 +104,15 @@ describe("Rollback", () => {
     await platform.waitForRun(busy.id);
   });
 
-  it("refuses a Rollback while the Console is paused, and of anything not in the history", async () => {
+  it("refuses a Rollback while the Console is paused, and of anything not in the history (404)", async () => {
     const { platform, agent } = await start({ spendingCapUsd: 1 });
     const snow = await land(platform, agent, "Alice", "make it snow", (run) => {
       run.usage({ inputTokens: 100_000, outputTokens: 0 });
       return run.writeFile("features/snow/snow.js", "snow");
     });
     const starter = git(platform, ["rev-parse", `${snow.commit}^`]);
-    expect((await rollback(platform, "Carol", starter)).status).toBe(400);
-    expect((await rollback(platform, "Carol", "f".repeat(40))).status).toBe(400);
+    expect((await rollback(platform, "Carol", starter)).status).toBe(404);
+    expect((await rollback(platform, "Carol", "f".repeat(40))).status).toBe(404);
     expect((await rollback(platform, "", snow.commit!)).status).toBe(400);
 
     agent.enqueue((run) => {
@@ -132,8 +133,8 @@ describe("Rollback", () => {
     expect(redone).toMatchObject({ state: "landed" });
     expect(await (await platform.fetchCanvas("/features/snow/snow.js")).text()).toBe("snow");
     expect(await (await platform.consoleApi("/api/history")).json()).toMatchObject([
-      { kind: "Rollback", nickname: "Dave", original: undone.commit, prompt: "make it snow" },
-      { kind: "Rollback", nickname: "Carol", original: snow.commit },
+      { kind: "Rollback", nickname: "Dave", original: { commit: undone.commit, nickname: "Carol" }, prompt: "make it snow" },
+      { kind: "Rollback", nickname: "Carol", original: { commit: snow.commit, nickname: "Alice" } },
       { kind: "Prompt", nickname: "Alice" },
     ]);
   });

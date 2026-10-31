@@ -92,29 +92,27 @@ describe("Console UI", () => {
   it("Rolls back a change from the history only after the Player confirms, and lists the Rollback", async () => {
     const { page, platform, agent } = await join(await open());
     agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
-    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const snowRun = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
     const history = page.getByTestId("history");
     await page.reload();
     const snow = history.locator("li", { hasText: "make it snow" });
     await snow.waitFor();
 
-    const dialogs: string[] = [];
-    page.once("dialog", (dialog) => {
-      dialogs.push(dialog.message());
-      void dialog.dismiss();
-    });
     await snow.getByRole("button", { name: "Roll back" }).click();
-    await expect.poll(() => dialogs.length).toBe(1);
-    expect(dialogs[0]).toContain("make it snow");
+    expect(await snow.textContent()).toContain("Roll back Bob's change?");
+    await snow.getByRole("button", { name: "Keep it" }).click();
+    expect(await snow.getByRole("button", { name: "Yes, roll back" }).count()).toBe(0);
     expect(await history.locator("li").count()).toBe(1);
 
-    page.once("dialog", (dialog) => void dialog.accept());
     await snow.getByRole("button", { name: "Roll back" }).click();
+    await snow.getByRole("button", { name: "Yes, roll back" }).click();
     await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
     const entry = history.locator("li").first();
     expect(await entry.textContent()).toContain("Alice rolled back Bob's");
     expect(await entry.textContent()).toContain("make it snow");
+    expect(await entry.textContent()).toContain(snowRun.commit!.slice(0, 7));
     expect(await entry.getByRole("button", { name: "Roll back" }).count()).toBe(1);
+    expect(await entry.getByRole("button", { name: "Fix it to this!" }).count()).toBe(1);
     expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
   });
 
@@ -223,6 +221,33 @@ describe("Console UI", () => {
     await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/restarted/i);
     restarted.release();
     await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/landed/i);
+  });
+
+  it("replays a change from the history after a confirmation, with the picked model, and credits the replayer", async () => {
+    const { page, platform, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing</h1>"));
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const original = page.getByTestId("history").locator("li", { hasText: "make it snow" });
+    await expect.poll(() => original.count(), { timeout: 10_000 }).toBe(1);
+
+    await original.getByRole("button", { name: "Fix it to this!" }).click();
+    expect(await original.getByRole("button", { name: "Replay" }).isVisible()).toBe(true);
+    await original.getByRole("button", { name: "Cancel" }).click();
+    expect(await original.getByRole("button", { name: "Replay" }).count()).toBe(0);
+    expect(agent.tasks).toHaveLength(1);
+
+    agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing again</h1>"));
+    await original.getByRole("button", { name: "Fix it to this!" }).click();
+    await original.getByLabel("Replay model").selectOption("claude-opus-5-5");
+    await original.getByRole("button", { name: "Replay" }).click();
+
+    const entry = page.getByTestId("history").locator("li").first();
+    await expect.poll(() => entry.textContent(), { timeout: 10_000 }).toContain("↻ Alice replayed Bob's");
+    expect(await entry.textContent()).toContain("make it snow");
+    const [replayed, snow] = await (await platform.consoleApi("/api/history")).json();
+    expect(await entry.getAttribute("data-original")).toBe(snow.commit);
+    expect(replayed.kind).toBe("Replay");
+    expect(agent.tasks[1].model).toBe("claude-opus-5-5");
   });
 
   it("tells the Player they already have a Prompt waiting", async () => {
