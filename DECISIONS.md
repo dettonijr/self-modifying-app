@@ -78,6 +78,16 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`Runs.replay()` checks the pause before and after reading history, then goes through the same `enqueue()` as Prompts** (ticket 10), so it uses the Player's one waiting slot.
 - **Console: each history entry has "Fix it to this!", which opens an inline confirmation with a "Replay model" dropdown** that survives history refreshes (ticket 10). History shows "↻ Alice replayed Bob's 'prompt' `abc1234`"; Replay Runs are marked ↻ in the Runs and queue lists.
 
+## Rollback
+
+- **`POST /api/rollbacks` with `{commit}` and the nickname cookie** (ticket 09) answers 202 with the Run, or 400 (no nickname), 404 (`not-found`), 409 (`already-waiting`) or 503 (paused). `Runs.rollback()` checks the pause before and after reading history, then uses the same `enqueue()` as Prompts and Replays.
+- **A Rollback Run has `kind: "Rollback"`, `original: {commit, nickname}`, the original change's Prompt as `prompt`, the rolling-back Player as `nickname`, and always `DEFAULT_MODEL` (Sonnet 5.5)** (ticket 09). Players can't pick a model for a Rollback.
+- **Rollback commits use the same `Original:` / `Original-Nickname:` trailers as Replay, with the subject `Rollback by <nick>: <original prompt>`** (ticket 09).
+- **A Rollback first tries `CanvasRepository.revert(worktree, commit)` (`git revert --no-commit`); if that's clean the Agent isn't called** (ticket 09). If it conflicts, the worktree is reset and the Agent gets `rollbackInstructions()` from `src/rollback.ts` (original Prompt and author, the diff cut at `MAX_REPLAY_DIFF_LENGTH`, and later Prompts), starting from the latest Canvas with no conflict markers. The restart repeats revert-then-Agent.
+- **Conflict resolution is told the Run's intent via `Runs.intent(run)`** (ticket 09): for a Rollback that's `rollbackIntent()` ("Roll back X's change … keeping everything after"), so the resolver doesn't re-apply the change. Prompts and Replays still use `run.prompt`.
+- **Known limitation: rolling back a change that's already undone is rejected as "The Agent didn't change anything"** (ticket 09), a confusing message for a mechanical revert.
+- **Console: "Roll back" sits next to "Fix it to this!", with an inline confirmation; only one confirmation is open per entry** (ticket 09). History shows "↩ Alice rolled back Bob's 'prompt' `abc1234`". Roll back buttons aren't disabled while paused; the server answers 503 and the status line shows the error.
+
 ## Render check
 
 - **The render check is its own step in the Lander** (ticket 07): commit the worktree, run the check, then move `main`. Failures return `failure: "render"` (reason "Canvas didn't render") or `failure: "unchanged"`; ticket 08 routes on `failure`. The specific problem is only logged with `console.warn`; Players see "Canvas didn't render".
