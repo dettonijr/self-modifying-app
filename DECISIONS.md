@@ -211,6 +211,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Run page log filters** (log ticket 01): `#log .filters` buttons with `aria-pressed` and `data-source`; hidden sources saved in `localStorage["runLogHidden"]` (JSON array) and applied as `#log[data-hide~="<source>"]`, so CSS hides live entries too. Entry labels: Platform, Claude, Thinking, Tool. The chips' checkmark uses `content: "✓ " / ""` so it stays out of the accessible name.
 - **Thinking entries are `--color-text-muted` italic** (`--color-text-disabled` fails AA); longer than one line or 100 characters they become `details.text > summary > .first` plus `.more`, ellipsised when closed; the summary is at least 44px; `.text`'s `textContent` is the full text (log ticket 01).
 - **The real-Claude smoke test also checks for a tool entry**; not run since (log ticket 01).
+- **Known flake: the Run page test "shows Claude's thinking labelled and dimmer…" failed once in a full-suite run after merging log ticket 01**; it passed in three runs of the file alone.
 ## Look and feel
 
 - **The platform pages use the Tokyo Night (Night) palette, dark only for now** (user, 2026-10-31). The Console, Run page and Canvas banner/notice take every colour from one palette file of named variables, so the palette can be swapped by editing that file; a light theme (Tokyo Night Day) would just be a second set of values.
