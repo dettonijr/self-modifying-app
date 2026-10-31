@@ -53,6 +53,20 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Errors in a feature's own files and unhandled promise rejections don't count** (ticket 07), so a broken feature that still renders Lands, as designed.
 - **Test fixtures must leave something visible in `index.html` to Land** (ticket 07); bare text like `"x"` is enough.
 
+## Queue and the Console WebSocket
+
+- **The parallel Run limit lives only in `MAX_PARALLEL_RUNS` in `src/runs.ts`** (ticket 05). Waiting Prompts start oldest first in `Runs.startWaitingRuns()`. `RunState` starts with `waiting`.
+- **One waiting Prompt per Player is an exact match on the trimmed nickname** (ticket 05). A second one gets 409 with reason `already-waiting`. The slot frees as soon as the Prompt starts running.
+- **The queue is in memory only until ticket 13**, so a shutdown drops waiting Prompts.
+- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending.
+- **The Console WebSocket is `/api/live`, using the `ws` package** (ticket 05). On connecting, a client gets `{type:"snapshot", queue, runs}`, then `queue`, `run` (every state change) and `progress` messages. The snapshot holds Runs in progress plus the last 20 finished; each Run view keeps its latest 50 progress events. Types are `RunsEvent` and `RunsSnapshot` in `runs.ts`.
+- **`Runs.subscribe(listener)` gets every Run event** (ticket 05). Ticket 04's `onChange` wraps it, so it also fires for `waiting`, which the Canvas channel ignores.
+- **WebSocket upgrades go through `isCrossOrigin()` (403) and get 404 for any other path** (ticket 05). Any future WebSocket must do the same.
+- **Closing an HTTP server doesn't close upgraded sockets** (ticket 05). The Console server terminates its WebSocket clients when it closes; any new WebSocket server must too, or `platform.close()` hangs.
+- **The Console page gets Run status from the WebSocket and reconnects 1 second after it closes** (ticket 05). History refreshes on connect and on each Land. Spending is still polled every 2 seconds and refreshed whenever a Run finishes.
+- **`playwright` is a runtime dependency, `ws` a dependency, `@types/ws` a dev dependency** (merge of 05 and 07).
+- **Harness: `platform.live()` returns a WebSocket client with `messages` and `waitFor(match)`** (ticket 05).
+
 ## Spending cap
 
 - **Prices live only in `PRICES` in `src/budget.ts`** (ticket 12), in US dollars per million tokens, taken from the claude-api skill on 2026-10-31: Sonnet 5.5 costs $2 input and $10 output, Opus 5.5 costs $4 and $20. The cost counts input and output tokens only; if the Agent starts reporting cache tokens, extend `TokenUsage` and `PRICES` together.
