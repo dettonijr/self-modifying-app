@@ -37,6 +37,7 @@ export interface RunView {
   prompt: string;
   model: string;
   error?: string;
+  commit?: string;
 }
 
 /**

@@ -85,6 +85,16 @@ describe("Console UI", () => {
     expect(agent.tasks[0].model).toBe("claude-opus-5-5");
     expect(await (await platform.fetchCanvas("/")).text()).toBe("<h1>Snowing</h1>");
   });
+
+  it("tells the Player why their Prompt didn't Land when the Canvas didn't render", async () => {
+    const { page, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("index.html", "<body></body>"));
+
+    await page.getByLabel("Prompt").fill("blank it");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    await expect.poll(() => page.locator("#status").textContent(), { timeout: 10_000 }).toContain("Canvas didn't render");
+  });
 });
 
 async function join<T extends { page: Page }>(opened: T): Promise<T> {

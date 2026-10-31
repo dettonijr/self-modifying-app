@@ -5,6 +5,7 @@ import { createCanvasServer } from "./canvas-server.ts";
 import { createConsoleServer } from "./console-server.ts";
 import { close, listen } from "./http.ts";
 import { Lander } from "./lander.ts";
+import { RenderCheck } from "./render-check.ts";
 import { Runs } from "./runs.ts";
 
 export interface PlatformOptions {
@@ -29,7 +30,8 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
   const host = options.host ?? "0.0.0.0";
   const repo = await CanvasRepository.open(path.join(options.dataDir, "canvas"));
 
-  const runs = new Runs({ repo, agent: options.agent, lander: new Lander(repo), worktreesDir: path.join(options.dataDir, "worktrees") });
+  const renderCheck = new RenderCheck(repo);
+  const runs = new Runs({ repo, agent: options.agent, lander: new Lander(repo, renderCheck), worktreesDir: path.join(options.dataDir, "worktrees") });
 
   const consoleServer = createConsoleServer({ runs, repo });
   const canvasServer = createCanvasServer(repo);
@@ -42,6 +44,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
     async close() {
       await Promise.all([close(consoleServer), close(canvasServer)]);
       await runs.close();
+      await renderCheck.close();
     },
   };
 }

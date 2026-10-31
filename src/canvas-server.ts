@@ -3,8 +3,11 @@ import path from "node:path";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { contentType } from "./http.ts";
 
-/** Serves the Canvas straight from the commit `main` points to. */
-export function createCanvasServer(repo: CanvasRepository): Server {
+/**
+ * Serves the Canvas straight from the commit `main` points to, or from the
+ * commit `commit` picks, e.g. a candidate the render check loads.
+ */
+export function createCanvasServer(repo: CanvasRepository, commit: () => Promise<string> = () => repo.main()): Server {
   return createServer(async (req, res) => {
     try {
       if (req.method !== "GET" && req.method !== "HEAD") {
@@ -16,10 +19,10 @@ export function createCanvasServer(repo: CanvasRepository): Server {
         res.writeHead(404).end("Not found");
         return;
       }
-      const commit = await repo.main();
+      const served = await commit();
       const candidates = filePath === "" ? ["index.html"] : [filePath, `${filePath}/index.html`];
       for (const candidate of candidates) {
-        const body = await repo.readFile(commit, candidate);
+        const body = await repo.readFile(served, candidate);
         if (body === undefined) continue;
         res.writeHead(200, { "content-type": contentType(candidate), "cache-control": "no-cache" });
         res.end(req.method === "HEAD" ? undefined : body);
