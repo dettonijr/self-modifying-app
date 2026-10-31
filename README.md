@@ -17,12 +17,23 @@ docker compose up --build
 
 Both listen on all interfaces, so other devices on the network can join. Set `CONSOLE_PORT` or `CANVAS_PORT` to change the published ports. The Canvas repo lives in the `data` volume. It's created with the starter Canvas (`starter-canvas/`) on first start and reused afterwards.
 
+### Spending cap
+
+Every Run's token usage is converted to cost with the per-model prices in `src/budget.ts` and added to a running total, shown in the Console. When the total reaches the cap, the Console pauses: new Prompts are refused, and Runs already in progress finish. The cap is `SPENDING_CAP_USD` (default $10). To raise it while the platform runs:
+
+```sh
+docker compose exec platform npm run raise-cap -- 20
+```
+
+It can only go up, and the Console resumes at once. The total (`spending.json`) and the raised cap (`spending-cap.json`) live in the data volume, so both survive restarts.
+
 Without Docker you need Node 22.18 or later, which runs the TypeScript directly with no build step, and git: `npm install && npm start`. The data goes to `./data`.
 
 ## Layout
 
 - `src/`: the platform. `platform.ts` starts everything. The main pieces are the `canvas-repository.ts` git repo, the `canvas-server.ts` and `console-server.ts` servers (separate origins, the Console UI is `console-page.html`), and the `agent.ts` Agent interface.
 - A Prompt becomes a Run in `runs.ts`: it validates the Prompt, gives the Run a worktree branched from `main` (under `<data>/worktrees/`), lets the Agent edit it, hands it to the Lander and removes the worktree whatever happens. `lander.ts` commits the worktree and moves `main` to that commit, so the change is live. Every commit records its metadata as git trailers (`Kind`, `Nickname`, `Model`) after the Prompt text, and the history is read back from them.
+- `budget.ts` records token usage, prices it and decides whether the Console is paused. `cli.ts` (logic in `host-commands.ts`) holds the host's commands, such as `raise-cap`.
 - `starter-canvas/`: what a new Canvas repo starts with, including the Canvas `CLAUDE.md` conventions for Claude.
 - `test/`: the test suite. `test/support/` holds the harness.
 

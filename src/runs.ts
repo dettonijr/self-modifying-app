@@ -1,11 +1,13 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
+import type { Budget } from "./budget.ts";
 import type { CanvasRepository, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
 export const MAX_NICKNAME_LENGTH = 40;
+export const PAUSED_MESSAGE = "The Console is paused: the game has reached its spending cap. The host can raise it to continue.";
 
 /** `running → landing → landed`, or `rejected` if the Agent fails or nothing Lands. */
 export type RunState = "running" | "landing" | "landed" | "rejected";
@@ -29,9 +31,9 @@ export interface PromptRequest {
 }
 
 export class PromptRefused extends Error {
-  /** `invalid`: the request breaks a rule. `busy`: another Run is in progress. */
-  readonly reason: "invalid" | "busy";
-  constructor(reason: "invalid" | "busy", message: string) {
+  /** `invalid`: the request breaks a rule. `busy`: another Run is in progress. `paused`: the spending cap is reached. */
+  readonly reason: "invalid" | "busy" | "paused";
+  constructor(reason: "invalid" | "busy" | "paused", message: string) {
     super(message);
     this.reason = reason;
   }
@@ -46,19 +48,22 @@ export class Runs {
   private readonly repo: CanvasRepository;
   private readonly agent: Agent;
   private readonly lander: Lander;
+  private readonly budget: Budget;
   private readonly worktreesDir: string;
   private readonly runs = new Map<string, RunView>();
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
 
-  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; worktreesDir: string }) {
+  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; worktreesDir: string }) {
     this.repo = options.repo;
     this.agent = options.agent;
     this.lander = options.lander;
+    this.budget = options.budget;
     this.worktreesDir = options.worktreesDir;
   }
 
   /** Validates a Prompt and starts its Run, or throws `PromptRefused`. */
   start(request: PromptRequest): RunView {
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
     if (this.inProgress.size > 0) throw new PromptRefused("busy", "Another Run is in progress; try again when it's done");
     const run: RunView = { id: randomUUID(), state: "running", nickname, prompt, model };
@@ -115,6 +120,7 @@ export class Runs {
   private async runAgent(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<string | undefined> {
     const events = this.agent.run({ worktree: worktree.dir, instructions: run.prompt, model: run.model, signal });
     for await (const event of events) {
+      if (event.type === "usage") this.budget.record(run.model, event.usage);
       if (event.type === "result") return event.outcome === "failure" ? event.error : undefined;
     }
     return "The Agent stopped without a result";

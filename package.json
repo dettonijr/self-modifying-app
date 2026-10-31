@@ -7,6 +7,7 @@
   },
   "scripts": {
     "start": "node src/main.ts",
+    "raise-cap": "node src/cli.ts raise-cap",
     "test": "vitest run",
     "typecheck": "tsc"
   },
