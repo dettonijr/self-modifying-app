@@ -1,0 +1,3 @@
+# Separate origins are what protect the Console
+
+Claude must never be able to change the Console, but the JS it writes into the Canvas runs in Players' browsers. If the Console and Canvas shared an origin, Canvas code could read and rewrite the Console, for example to disable the Prompt box. The two are served on separate origins (different ports), so the browser's same-origin policy enforces the boundary, rather than trusting Claude to follow instructions. Platform code that must appear on the Canvas, such as the "changing" banner and the reload script, is injected by the Canvas server and can't be edited by Claude.

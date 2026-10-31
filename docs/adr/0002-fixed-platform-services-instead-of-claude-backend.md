@@ -1,0 +1,3 @@
+# Fixed platform services instead of back-end code written by Claude
+
+Players will ask for features that need a backend, such as a live chat. Claude writes only front-end Canvas code. Backend needs are met by two fixed services the platform provides through a client library: a real-time channel that broadcasts to all viewers, and a key-value store with keys kept separately per feature. Letting Claude write and run server code would be far more powerful, but would give anonymous Prompts a path to code executing on the host and to breaking the platform. Stored data isn't versioned with the Canvas, so it survives Rollback and Replay.
