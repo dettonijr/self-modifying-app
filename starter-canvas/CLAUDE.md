@@ -23,3 +23,29 @@ This folder is the Canvas: a website that changes in response to Prompts sent by
 - The platform injects its own script into every page it serves (the "changing the page" banner and automatic reload). Don't try to edit, remove or work around it.
 - Paths under `/__platform/` belong to the platform; don't create files there.
 - Pages are served at URLs that include the version, like `/@<commit>/index.html`. Refer to the Canvas's own files with relative URLs (`theme.css`, `features/x/x.js`, `./y.js`), never ones starting with `/`, so every file a page loads comes from the same version.
+
+## Shared and real-time data: the platform services
+
+The Canvas has no server code of its own, and you can't add any. Features that need a backend (a live chat, cursors, votes, a guestbook, high scores, a counter) use the two platform services instead, through the client library at `/__platform/services.js` (one of the few absolute URLs you should use):
+
+```js
+import { channel, store } from "/__platform/services.js";
+
+// Real-time channel: messages reach every viewer of the Canvas, the sender included.
+const chat = channel("chat");
+const stop = chat.onMessage((message) => showLine(message.nickname, message.text)); // stop() unsubscribes
+await chat.send({ nickname, text }); // any JSON value, up to 16 KB
+
+// Key-value store: shared by every viewer and kept across every change to the Canvas.
+const db = store("chat");
+await db.set("line/" + Date.now(), { nickname, text }); // any JSON value, up to 64 KB; keys up to 256 characters
+const title = await db.get("title"); // undefined if missing
+const lines = await db.list("line/"); // [{ key, value }] sorted by key; list() returns everything
+await db.delete("title");
+```
+
+- Pass the feature's folder name to `channel()` and `store()`. Each feature has its own channel and its own keys, so features don't see each other's messages or overwrite each other's data. Use another feature's name only when the Prompt is about sharing its data.
+- Channel messages aren't stored: a viewer only gets messages sent while their page is open. To show history (chat logs, guestbooks), also save each item in the store and load it with `list()` when the page opens.
+- Stored data isn't part of the Canvas's files, so it survives every change, Rollback and Replay, including removing the feature. Code may find data saved by an older version of the feature, so read it defensively.
+- There are no transactions: `get` then `set` from two viewers at once can lose an update. For tallies, prefer one key per contribution (e.g. `vote/<random id>`) counted with `list()`, over one shared counter.
+- Pages reload when a change Lands, so subscribe and load data when the module starts.

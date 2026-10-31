@@ -6,12 +6,13 @@ import { CanvasRepository } from "./canvas-repository.ts";
 import { createCanvasServer } from "./canvas-server.ts";
 import { createConsoleServer } from "./console-server.ts";
 import { close, listen } from "./http.ts";
+import { KeyValueStore } from "./key-value-store.ts";
 import { Lander } from "./lander.ts";
 import { RenderCheck } from "./render-check.ts";
 import { Runs } from "./runs.ts";
 
 export interface PlatformOptions {
-  /** Holds the Canvas repo (and later the SQLite database). Created if missing. */
+  /** Holds the Canvas repo and the platform services' SQLite database. Created if missing. */
   dataDir: string;
   agent: Agent;
   /** Interface to listen on; `0.0.0.0` makes both servers reachable on the network. */
@@ -62,7 +63,8 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
     }
     if (run.state === "rejected") channel.publish({ type: "rejected", runId: run.id });
   });
-  const canvasServer = createCanvasServer({ repo, channel });
+  const store = new KeyValueStore(path.join(options.dataDir, "services.sqlite"));
+  const canvasServer = createCanvasServer({ repo, channel, store });
   const consolePort = await listen(consoleServer, options.consolePort ?? 0, host);
   const canvasPort = await listen(canvasServer, options.canvasPort ?? 0, host);
 
@@ -73,6 +75,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
       await Promise.all([close(consoleServer), close(canvasServer)]);
       await runs.close();
       await renderCheck.close();
+      store.close();
     },
   };
 }

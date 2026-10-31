@@ -13,7 +13,9 @@ export type PlatformEvent =
 /**
  * The Canvas real-time channel: a Server-Sent Events stream every viewer keeps
  * open. Each message is tagged with an SSE event name, so platform events
- * (`platform`) stay apart from the feature messages ticket 11 adds.
+ * (`platform`) stay apart from feature messages (`feature`), which Canvas
+ * code sends through the client library and can never pass off as platform
+ * events.
  */
 export class CanvasChannel {
   private readonly viewers = new Set<ServerResponse>();
@@ -35,6 +37,11 @@ export class CanvasChannel {
 
   publish(event: PlatformEvent): void {
     for (const viewer of this.viewers) write(viewer, "platform", event);
+  }
+
+  /** Broadcasts a feature's message to every viewer, the sender included. */
+  publishFeatureMessage(feature: string, message: unknown): void {
+    for (const viewer of this.viewers) write(viewer, "feature", { feature, message });
   }
 }
 

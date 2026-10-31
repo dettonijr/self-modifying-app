@@ -3,7 +3,9 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { CanvasChannel } from "./canvas-channel.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
+import type { KeyValueStore } from "./key-value-store.ts";
 import { contentType } from "./http.ts";
+import { handleServiceRequest, SERVICES_LIBRARY } from "./platform-services.ts";
 
 /** URL paths under this prefix belong to the platform; Canvas files there are never served. */
 const PLATFORM_PREFIX = "/__platform/";
@@ -18,21 +20,26 @@ const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
  * relative URL comes from that one commit: never a mix of versions, and never
  * stale, because a new commit means new URLs.
  */
-export function createCanvasServer(options: { repo: CanvasRepository; channel: CanvasChannel }): Server {
-  const { repo, channel } = options;
+export function createCanvasServer(options: { repo: CanvasRepository; channel: CanvasChannel; store: KeyValueStore }): Server {
+  const { repo, channel, store } = options;
   return createServer(async (req, res) => {
     try {
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        res.writeHead(405, { allow: "GET, HEAD" }).end();
-        return;
-      }
       const url = new URL(req.url ?? "/", "http://canvas");
       if (url.pathname.startsWith(PLATFORM_PREFIX)) {
-        if (url.pathname === `${PLATFORM_PREFIX}platform.js`) {
-          return send(res, req.method, url.pathname, PLATFORM_SCRIPT, "no-cache");
+        const platformPath = url.pathname.slice(PLATFORM_PREFIX.length);
+        if (await handleServiceRequest(req, res, platformPath, { channel, store })) return;
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          res.writeHead(405, { allow: "GET, HEAD" }).end();
+          return;
         }
-        if (url.pathname === `${PLATFORM_PREFIX}events` && req.method === "GET") return await channel.connect(req, res);
+        if (platformPath === "platform.js") return send(res, req.method, url.pathname, PLATFORM_SCRIPT, "no-cache");
+        if (platformPath === "services.js") return send(res, req.method, url.pathname, SERVICES_LIBRARY, "no-cache");
+        if (platformPath === "events" && req.method === "GET") return await channel.connect(req, res);
         res.writeHead(404).end("Not found");
+        return;
+      }
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405, { allow: "GET, HEAD" }).end();
         return;
       }
       const pinned = PINNED_PATH.exec(url.pathname);

@@ -1,4 +1,4 @@
-import type { IncomingMessage, Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 export function listen(server: Server, port: number, host: string): Promise<number> {
@@ -57,5 +57,26 @@ export function isCrossOrigin(req: IncomingMessage): boolean {
     return new URL(origin).host !== req.headers.host;
   } catch {
     return true;
+  }
+}
+
+export function sendJson(res: ServerResponse, status: number, body: unknown): void {
+  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(body));
+}
+
+/** Reads a JSON object body of at most `maxBytes`; `undefined` if it's too big or not a JSON object. */
+export async function readJson(req: IncomingMessage, maxBytes = 16 * 1024): Promise<Record<string, unknown> | undefined> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req as AsyncIterable<Buffer>) {
+    size += chunk.length;
+    if (size > maxBytes) return undefined;
+    chunks.push(chunk);
+  }
+  try {
+    const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
   }
 }
