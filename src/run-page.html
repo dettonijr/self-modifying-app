@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Run</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    .error { color: #b00020; }
+    .nickname { font-weight: bold; }
+    .state { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.1em 0.4em; border-radius: 0.3em; background: #eee; }
+    .state.landed { background: #d7f5dd; }
+    .state.rejected { background: #fbe0e3; }
+    .state.resolving, .state.restarted { background: #fdf0cf; }
+    .prompt { white-space: pre-wrap; margin: 0.75rem 0; padding: 0.5rem 0.75rem; border-left: 3px solid #ddd; }
+    .details { color: #666; font-size: 0.9em; }
+    .outcome.landed { color: #1b7a33; }
+    .actions { margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .confirm { background: #f4f4f4; padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
+    .empty { color: #666; }
+    .paused { background: #fff4e5; border: 1px solid #f0b54a; padding: 0.75rem 1rem; border-radius: 0.25rem; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <nav><a href="/">← Prompts</a></nav>
+  <p class="paused" data-testid="paused" id="paused" role="alert" hidden>
+    The Console is paused: the game has reached its spending cap. Replays and Rollbacks are refused until the host raises it.
+  </p>
+  <p id="status" role="status"></p>
+
+  <section id="missing" data-testid="missing" hidden>
+    <h1>No such Run</h1>
+    <p>There's no Run with this link. It may have been mistyped. <a href="/">See every Prompt</a>.</p>
+  </section>
+
+  <article id="run" data-testid="run" hidden>
+    <h1 id="headline"></h1>
+    <p id="original" class="original" hidden></p>
+    <p id="prompt" class="prompt"></p>
+    <p id="details" class="details"></p>
+    <div id="actions"></div>
+
+    <!-- Ticket 03 fills this section with the live log. -->
+    <section id="log" data-testid="log">
+      <h2>Log</h2>
+      <div class="body"></div>
+    </section>
+
+    <!-- Ticket 04 fills this section with the changed files. -->
+    <section id="files" data-testid="files">
+      <h2>Changed files</h2>
+      <div class="body"></div>
+    </section>
+  </article>
+
+  <script type="module">
+    import { actionsFor, connectLive, followSpending, isFinished, modelName, runUrl, span } from "/console-shared.js";
+
+    const $ = (id) => document.getElementById(id);
+    // The id from the URL: a Run id, or the commit of a Landed change.
+    const requested = decodeURIComponent(location.pathname.slice("/runs/".length));
+    // The Run as last fetched from /api/runs/<id>, with each live summary merged in.
+    let run;
+
+    /**
+     * The page's sections below the Run's details, each filling its own
+     * element. `render(run)` gets the full Run view whenever it's fetched (on
+     * opening and on reconnecting); `live(message)` gets every live message
+     * about this Run after that.
+     */
+    const logSection = {
+      element: $("log").querySelector(".body"),
+      render(run) {
+        if (!run.log?.length) this.element.replaceChildren(span("empty", "No log recorded"));
+      },
+      live(_message) {},
+    };
+
+    const filesSection = {
+      element: $("files").querySelector(".body"),
+      render(_run) {},
+      live(_message) {},
+    };
+
+    const sections = [logSection, filesSection];
+
+    function setStatus(message, isError = false) {
+      $("status").replaceChildren(...(Array.isArray(message) ? message : [message]));
+      $("status").className = isError ? "error" : "";
+    }
+
+    async function load() {
+      const response = await fetch(`/api/runs/${encodeURIComponent(requested)}`);
+      if (response.status === 404) {
+        document.title = "No such Run";
+        $("missing").hidden = false;
+        $("run").hidden = true;
+        return;
+      }
+      if (!response.ok) return setStatus("Couldn't load this Run; retrying…", true);
+      run = await response.json();
+      renderDetails();
+      for (const section of sections) section.render(run);
+      $("run").hidden = false;
+    }
+
+    /** The same details as the Run's Prompts list entry, with the whole Prompt, plus Replay and Roll back once Landed. */
+    function renderDetails() {
+      document.title = `${run.nickname}: ${run.prompt}`;
+      $("run").dataset.state = run.state;
+      $("run").dataset.run = run.id;
+      $("headline").replaceChildren(span(`state ${run.state}`, run.state), " ", span("nickname", run.nickname));
+      $("original").hidden = !run.original;
+      if (run.original) {
+        const link = document.createElement("a");
+        link.href = runUrl(run.original.commit);
+        const [mark, kind] = run.kind === "Rollback" ? ["↩ ", "Rollback"] : ["↻ ", "Replay"];
+        link.append(`${kind} of `, span("nickname original-nickname", run.original.nickname), `'s '${run.prompt}'`);
+        $("original").replaceChildren(mark, link);
+      }
+      $("prompt").textContent = run.prompt;
+      const details = [span("model", modelName(run.model))];
+      if (run.time) {
+        const time = document.createElement("time");
+        time.dateTime = run.time;
+        time.textContent = new Date(run.time).toLocaleString();
+        details.push(" · ", time);
+      }
+      if (run.state === "landed") details.push(" · ", span("outcome landed", "Landed"));
+      if (run.state === "rejected") details.push(" · ", span("outcome error", run.error ?? "Rejected"));
+      $("details").replaceChildren(...details);
+      $("actions").replaceChildren(...(run.state === "landed" && run.commit ? [actionsFor(run, { defaultModel: () => run.model, onQueued })] : []));
+    }
+
+    function onQueued({ ok, what, run: queued, error, started }) {
+      if (!ok) return setStatus(error, true);
+      const link = document.createElement("a");
+      link.href = runUrl(queued.id);
+      link.textContent = `Follow your ${what}`;
+      setStatus([queued.state === "waiting" ? `Your ${what} is in the queue… ` : `${started} `, link]);
+    }
+
+    function handleLive(message) {
+      // Reconnected: fetch the whole Run again, in case something was missed.
+      if (message.type === "snapshot") return void load();
+      if (run === undefined) return;
+      if (message.type === "run" && message.run.id === run.id) {
+        const finished = isFinished(message.run) && !isFinished(run);
+        Object.assign(run, message.run);
+        renderDetails();
+        if (finished) void refreshSpending();
+      }
+      if ((message.run?.id ?? message.runId) === run.id) for (const section of sections) section.live(message);
+    }
+
+    const refreshSpending = followSpending((spending) => ($("paused").hidden = !spending.paused));
+    connectLive(handleLive);
+  </script>
+</body>
+</html>

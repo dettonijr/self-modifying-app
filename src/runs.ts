@@ -256,8 +256,9 @@ export class Runs {
     this.startWaitingRuns();
   }
 
+  /** A Run by its id, or else the Run that Landed as commit `id` (as a Replay or Rollback refers to its original). */
   get(id: string): RunView | undefined {
-    const run = this.runs.get(id);
+    const run = this.runs.get(id) ?? [...this.runs.values()].find((candidate) => candidate.commit === id);
     return run && copy(run);
   }
 

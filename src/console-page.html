@@ -13,6 +13,8 @@
     .error { color: #b00020; }
     #prompts { list-style: none; padding: 0; }
     #prompts li { border-top: 1px solid #ddd; padding: 0.5rem 0; }
+    #prompts li { cursor: pointer; }
+    #prompts a.open { color: inherit; text-decoration: none; }
     #prompts .details { color: #666; font-size: 0.85em; margin-top: 0.15rem; }
     #prompts .outcome.landed { color: #1b7a33; }
     #prompts .actions { margin-top: 0.25rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
@@ -53,10 +55,7 @@
       <textarea id="prompt" name="prompt" maxlength="500" required placeholder="Make the page snow"></textarea>
       <div class="row">
         <label for="model">Model</label>
-        <select id="model" name="model">
-          <option value="claude-sonnet-5-5" selected>Sonnet 5.5</option>
-          <option value="claude-opus-5-5">Opus 5.5</option>
-        </select>
+        <select id="model" name="model"></select>
         <span class="counter" data-testid="prompt-counter" id="prompt-counter">0 / 500</span>
         <button type="submit">Send</button>
       </div>
@@ -69,7 +68,11 @@
   <p id="prompts-empty" class="empty">No Prompts yet.</p>
 
   <script type="module">
+    import { actionsFor, connectLive, fillModels, followSpending, isFinished, modelName, pausable, runUrl, span } from "/console-shared.js";
+
     const $ = (id) => document.getElementById(id);
+    fillModels($("model"));
+    pausable(document.querySelector("#prompt-form button[type=submit]"));
     const MAX_PROMPT = 500;
 
     function readNickname() {
@@ -125,16 +128,9 @@
 
     // Live updates: a snapshot with every Run's summary on connecting, then each Run's summary whenever it changes.
     const MAX_PROMPT_SHOWN = 80;
-    const MODEL_NAMES = Object.fromEntries([...$("model").options].map((option) => [option.value, option.textContent]));
     const myRuns = new Set();
     // Entry elements by Run id, newest first in the list.
     const entries = new Map();
-
-    function connectLive() {
-      const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/live`);
-      socket.addEventListener("message", (event) => handleLive(JSON.parse(event.data)));
-      socket.addEventListener("close", () => setTimeout(connectLive, 1000));
-    }
 
     function handleLive(message) {
       if (message.type === "snapshot") {
@@ -149,7 +145,7 @@
         else $("prompts").prepend(updated);
         entries.set(run.id, updated);
         if (myRuns.has(run.id)) showMyRun(run);
-        if (run.state === "landed" || run.state === "rejected") void refreshSpending();
+        if (isFinished(run)) void refreshSpending();
       }
       $("prompts-empty").hidden = entries.size > 0;
     }
@@ -164,13 +160,6 @@
 
     const shorten = (text) => (text.length > MAX_PROMPT_SHOWN ? text.slice(0, MAX_PROMPT_SHOWN - 1).trimEnd() + "…" : text);
 
-    function span(className, text) {
-      const element = document.createElement("span");
-      element.className = className;
-      element.textContent = text;
-      return element;
-    }
-
     /** One Prompts list entry: state, who, the Prompt, model, time and outcome, plus Replay and Roll back once Landed. */
     function entry(run) {
       const item = document.createElement("li");
@@ -181,6 +170,11 @@
       prompt.className = "prompt";
       prompt.textContent = shorten(run.prompt);
       prompt.title = run.prompt;
+      // A real link too, for keyboards and opening in a new tab.
+      const link = document.createElement("a");
+      link.className = "open";
+      link.href = runUrl(run.id);
+      link.append(prompt);
       item.append(span(`state ${run.state}`, run.state), " ");
       if ((run.kind === "Replay" || run.kind === "Rollback") && run.original) {
         item.dataset.original = run.original.commit;
@@ -188,15 +182,15 @@
         reference.className = "original";
         reference.textContent = run.original.commit.slice(0, 7);
         reference.title = `${run.kind} of ${run.original.commit}`;
-        const finished = run.state === "landed" || run.state === "rejected";
+        const finished = isFinished(run);
         const [mark, verb] = run.kind === "Replay" ? ["↻ ", finished ? " replayed " : " replays "] : ["↩ ", finished ? " rolled back " : " rolls back "];
-        item.append(mark, who, verb, span("nickname original-nickname", run.original.nickname), "'s ", prompt, " ", reference);
+        item.append(mark, who, verb, span("nickname original-nickname", run.original.nickname), "'s ", link, " ", reference);
       } else {
-        item.append(who, ": ", prompt);
+        item.append(who, ": ", link);
       }
       const details = document.createElement("div");
       details.className = "details";
-      details.append(span("model", MODEL_NAMES[run.model] ?? run.model));
+      details.append(span("model", modelName(run.model)));
       if (run.time) {
         const time = document.createElement("time");
         time.dateTime = run.time;
@@ -206,115 +200,31 @@
       if (run.state === "landed") details.append(" · ", span("outcome landed", "Landed"));
       if (run.state === "rejected") details.append(" · ", span("outcome error", run.error ?? "Rejected"));
       item.append(details);
-      if (run.state === "landed" && run.commit) item.append(actionsFor(run));
+      // The whole entry opens the Run's page, except its buttons and confirmations.
+      item.addEventListener("click", (event) => {
+        if (event.target.closest("button, select, a, .confirm")) return;
+        location.href = runUrl(run.id);
+      });
+      if (run.state === "landed" && run.commit) item.append(actionsFor(run, { defaultModel: () => $("model").value, onQueued }));
       return item;
     }
 
-    // The open confirmation, kept across updates: the Run's id, whether it's a "replay" or a "rollback", and the picked Replay model.
-    let confirming;
-    // Whether the spending cap pauses the Console; Send, Replay and Roll back are disabled while it does.
-    let paused = false;
-
-    function pausable(button) {
-      button.dataset.pausable = "";
-      button.disabled = paused;
-      return button;
-    }
-
-    function button(text, onClick) {
-      const element = document.createElement("button");
-      element.type = "button";
-      element.textContent = text;
-      element.addEventListener("click", onClick);
-      return element;
-    }
-
-    function actionsFor(run) {
-      const actions = document.createElement("div");
-      actions.className = "actions";
-      const replay = pausable(button("Replay", () => {
-        confirming = { id: run.id, action: "replay", model: $("model").value };
-        showReplayConfirmation(run, actions);
-      }));
-      const rollback = pausable(button("Roll back", () => {
-        confirming = { id: run.id, action: "rollback" };
-        showRollbackConfirmation(run, actions);
-      }));
-      actions.append(replay, rollback);
-      if (confirming?.id === run.id) {
-        if (confirming.action === "replay") showReplayConfirmation(run, actions);
-        else showRollbackConfirmation(run, actions);
-      }
-      return actions;
-    }
-
-    function closeConfirmation(confirm) {
-      confirming = undefined;
-      confirm.remove();
-    }
-
-    /** Asks before a Replay starts, and lets the Player pick its model. */
-    function showReplayConfirmation(run, actions) {
-      actions.querySelector(".confirm")?.remove();
-      const confirm = document.createElement("span");
-      confirm.className = "confirm replay";
-      const question = span("", `Replay ${run.nickname}'s Prompt on the current Canvas?`);
-      const model = $("model").cloneNode(true);
-      model.removeAttribute("id");
-      model.setAttribute("aria-label", "Replay model");
-      model.value = confirming.model;
-      model.addEventListener("change", () => (confirming.model = model.value));
-      const go = pausable(button("Yes, replay", async () => {
-        closeConfirmation(confirm);
-        await queueChange("/api/replays", { commit: run.commit, model: model.value }, "Replay", "Claude is working on your Replay…");
-      }));
-      const cancel = button("Cancel", () => closeConfirmation(confirm));
-      confirm.append(question, " ", model, " ", go, " ", cancel);
-      actions.append(confirm);
-    }
-
-    /** Asks before a Rollback starts. */
-    function showRollbackConfirmation(run, actions) {
-      actions.querySelector(".confirm")?.remove();
-      const confirm = document.createElement("span");
-      confirm.className = "confirm rollback";
-      const question = span("", `Roll back ${run.nickname}'s change? Everything that Landed after it is kept.`);
-      const go = pausable(button("Yes, roll back", async () => {
-        closeConfirmation(confirm);
-        await queueChange("/api/rollbacks", { commit: run.commit }, "Rollback", "Rolling it back…");
-      }));
-      const cancel = button("Keep it", () => closeConfirmation(confirm));
-      confirm.append(question, " ", go, " ", cancel);
-      actions.append(confirm);
-    }
-
-    async function queueChange(url, body, what, started) {
-      const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      const run = await response.json().catch(() => ({}));
-      if (!response.ok) return setStatus(run.error ?? `The ${what} was refused`, true);
+    function onQueued({ ok, what, run, error, started }) {
+      if (!ok) return setStatus(error, true);
       myRuns.add(run.id);
       setStatus(run.state === "waiting" ? `Your ${what} is in the queue…` : started);
     }
 
     const usd = (amount) => `$${amount.toFixed(2)}`;
 
-    // Polled for now; ticket 05's WebSocket can push the same /api/spending body.
-    async function refreshSpending() {
-      const response = await fetch("/api/spending");
-      if (!response.ok) return;
-      const spending = await response.json();
-      paused = spending.paused;
+    const refreshSpending = followSpending((spending) => {
       $("spending").textContent = `${usd(spending.totalUsd)} of ${usd(spending.capUsd)}`;
-      $("paused").hidden = !paused;
-      document.querySelector("#prompt-form button[type=submit]").disabled = paused;
-      for (const button of document.querySelectorAll("#prompts [data-pausable]")) button.disabled = paused;
-    }
+      $("paused").hidden = !spending.paused;
+    });
 
     showPlayer();
     updateCounter();
-    connectLive();
-    void refreshSpending();
-    setInterval(refreshSpending, 2000);
+    connectLive(handleLive);
   </script>
 </body>
 </html>

@@ -8,6 +8,8 @@ import { isCrossOrigin, readJson, sendJson } from "./http.ts";
 import { ChangeRefused, type Runs, type RunView } from "./runs.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
+const RUN_PAGE = readFileSync(new URL("./run-page.html", import.meta.url), "utf8");
+const SHARED_SCRIPT = readFileSync(new URL("./console-shared.js", import.meta.url), "utf8");
 const REFUSAL_STATUS: Record<ChangeRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503, "not-found": 404 };
 
 /**
@@ -21,6 +23,26 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       const url = new URL(req.url ?? "/", "http://console");
       if (url.pathname === "/" && req.method === "GET") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache" }).end(CONSOLE_PAGE);
+        return;
+      }
+      if (url.pathname === "/console-shared.js" && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" }).end(SHARED_SCRIPT);
+        return;
+      }
+      const runPage = /^\/runs\/([^/]+)$/.exec(url.pathname);
+      if (runPage && req.method === "GET") {
+        // Anyone may open a shared link to it, but other origins can't fetch or embed it.
+        if (isCrossOrigin(req) && !isTopLevelNavigation(req)) {
+          res.writeHead(403).end("The Run page only opens in its own tab");
+          return;
+        }
+        const status = runs.get(decodeURIComponent(runPage[1])) ? 200 : 404;
+        res.writeHead(status, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-cache",
+          "content-security-policy": "frame-ancestors 'none'",
+          "x-frame-options": "DENY",
+        }).end(RUN_PAGE);
         return;
       }
       if (url.pathname.startsWith("/api/") && isCrossOrigin(req)) {
@@ -102,6 +124,11 @@ function followRuns(client: WebSocket, runs: Runs): void {
   const unsubscribe = runs.subscribe((event) => client.send(JSON.stringify(event)));
   client.on("close", unsubscribe);
   client.on("error", () => client.terminate());
+}
+
+/** Whether the browser is opening the request as a page in a tab, e.g. from a link, rather than fetching or embedding it. */
+function isTopLevelNavigation(req: IncomingMessage): boolean {
+  return req.headers["sec-fetch-mode"] === "navigate" && req.headers["sec-fetch-dest"] === "document";
 }
 
 function refuseUpgrade(socket: Duplex, status: string): void {
