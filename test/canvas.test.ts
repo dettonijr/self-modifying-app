@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { chromium } from "playwright";
 import { afterEach, describe, expect, it } from "vitest";
 import { startTestPlatform, type TestPlatform } from "./support/harness.ts";
 
@@ -34,6 +35,30 @@ describe("Canvas server", () => {
     const text = await conventions.text();
     for (const rule of ["import map", "no build step", "one folder per feature", "theme variables"]) {
       expect(text.toLowerCase()).toContain(rule);
+    }
+  });
+
+  it("tells Claude in the starter Canvas conventions that every change must work on phones", async () => {
+    const platform = await start();
+
+    const text = (await (await platform.fetchCanvas("/CLAUDE.md")).text()).toLowerCase();
+    for (const rule of ["phone", "sideways", "pointer events", "hover", "44", '<meta name="viewport"']) {
+      expect(text).toContain(rule);
+    }
+  });
+
+  it("serves a starter Canvas that fits a 390px-wide phone without scrolling sideways", async () => {
+    const platform = await start();
+    const browser = await chromium.launch();
+    try {
+      const page = await browser.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+      await page.goto(platform.canvasUrl + "/");
+      await page.getByRole("button", { name: "Wave" }).waitFor();
+
+      expect(await page.locator('meta[name="viewport"]').getAttribute("content")).toContain("width=device-width");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+    } finally {
+      await browser.close();
     }
   });
 

@@ -55,6 +55,58 @@ describe("Render check", () => {
     expect(await (await platform.fetchCanvas("/features/hello/hello.js")).text()).toContain("the greeting broke");
   });
 
+  describe("at phone size too", () => {
+    it("doesn't Land a change that renders on desktop but is blank on a phone, and asks for a fix that says so", async () => {
+      const { platform, agent } = await start();
+      const before = main(platform);
+      breakEveryAttempt(agent, (run) =>
+        run.writeFile(
+          "index.html",
+          `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>@media (max-width: 600px) { body { display: none; } }</style></head><body><h1>The Canvas</h1></body></html>`,
+        ),
+      );
+
+      const run = await platform.sendPrompt({ nickname: "Erin", prompt: "desktop only" });
+
+      expect(await platform.waitForRun(run.id)).toMatchObject({ state: "rejected", error: "Canvas didn't render" });
+      expect(main(platform)).toBe(before);
+      expect(agent.tasks[1].instructions).toMatch(/phone-sized screen/);
+    });
+
+    it("doesn't Land a change whose page crashes only on a touch phone", async () => {
+      const { platform, agent } = await start();
+      const before = main(platform);
+      breakEveryAttempt(agent, (run) =>
+        run.writeFile(
+          "index.html",
+          `<!doctype html><html><body><h1>The Canvas</h1><script>if (navigator.maxTouchPoints > 0) throw new Error("no touch");</script></body></html>`,
+        ),
+      );
+
+      const run = await platform.sendPrompt({ nickname: "Finn", prompt: "mouse only" });
+
+      expect(await platform.waitForRun(run.id)).toMatchObject({ state: "rejected", error: "Canvas didn't render" });
+      expect(main(platform)).toBe(before);
+      expect(agent.tasks[1].instructions).toMatch(/phone-sized screen/);
+    });
+
+    it("Lands a change with an awkward but working phone layout", async () => {
+      const { platform, agent } = await start();
+      agent.enqueue((run) =>
+        run.writeFile(
+          "index.html",
+          `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div style="width: 2000px; font-size: 40px">Too wide for a phone</div></body></html>`,
+        ),
+      );
+
+      const run = await platform.sendPrompt({ nickname: "Gus", prompt: "make it wide" });
+
+      const finished = await platform.waitForRun(run.id);
+      expect(finished).toMatchObject({ state: "landed" });
+      expect(main(platform)).toBe(finished.commit);
+    });
+  });
+
   it("doesn't Land a change that removes the entry page", async () => {
     const { platform, agent } = await start();
     const before = main(platform);

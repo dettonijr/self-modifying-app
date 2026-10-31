@@ -25,7 +25,14 @@ const FORBIDDEN_TOOLS = ["Bash", "BashOutput", "KillShell", "WebFetch", "WebSear
 const PLATFORM_RULES = `You are editing the Canvas, a website shared by the Players of a game, in your current working directory.
 Players send Prompts; do what the Prompt asks by editing files there.
 You can only read and edit files inside the working directory: there is no shell and no network access.
-Make the change and stop; don't ask questions, nobody will answer them.`;
+Make the change and stop; don't ask questions, nobody will answer them.
+
+Players play on phones as well as computers, so every change must work on a phone:
+- Layouts fit narrow screens (from 360px wide) without scrolling sideways.
+- Touch works everywhere a mouse does: use pointer events (pointerdown, pointermove, pointerup) rather than mouse-only events, and set touch-action where dragging would otherwise scroll the page.
+- Nothing only works on hover; anything shown on hover must also be reachable by tapping.
+- Tap targets are at least 44×44px.
+- Every page has <meta name="viewport" content="width=device-width, initial-scale=1"> in its <head>.`;
 
 /**
  * The real Agent: Claude through the Claude Agent SDK, limited to file tools
