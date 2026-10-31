@@ -96,6 +96,10 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Errors in a feature's own files and unhandled promise rejections don't count** (ticket 07), so a broken feature that still renders Lands, as designed.
 - **Test fixtures must leave something visible in `index.html` to Land** (ticket 07); bare text like `"x"` is enough.
 
+- **The render check loads each candidate twice in the one shared Chromium, each in a fresh context: desktop (1280×720), then phone (390×844, `isMobile`, `hasTouch`, `deviceScaleFactor: 3`)** (Prompts list ticket 07). It stops at the first failure; both loads share the private server and in-memory store. The same blank/crash rules apply at both sizes; layout and sideways scrolling aren't checked. Each check now takes about twice as long.
+- **`LandResult.problem` starts with the screen, e.g. "On a phone-sized screen (390×844, touch): The page is blank"** (ticket 07), so the conflict-fixing Agent knows it failed on a phone. Players still see "Canvas didn't render".
+- **A `<body>` that isn't drawn at all (`display: none`) counts as blank** (ticket 07, fixing a desktop bug too).
+- **With `isMobile`, a page without a viewport meta is laid out about 980px wide**, so phone-only CSS only applies when the tag is present (ticket 07). Test fixtures targeting phone layouts need it.
 ## Queue and the Console WebSocket
 
 - **The parallel Run limit starts from `MAX_PARALLEL_RUNS` (default 3) and can be changed during play with `npm run set-parallel-runs -- <n>`** (tickets 05, 06; code review). The command writes `<data>/parallel-runs.json` as `{maxParallelRuns}`; once that file exists it wins over the environment variable, including after a restart. The value can go up or down; lowering never stops Runs in progress. Code is in `src/parallel-limit.ts`; `Runs` takes `maxParallelRuns` as a number or a function, and the platform passes one that re-reads the file.
@@ -197,6 +201,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The starter Canvas has its own copy of the Tokyo Night colours in its theme variables and doesn't import the platform palette** (user, 2026-10-31). The Canvas belongs to the Players, and Prompts may change its look.
 - **Buttons must be easy to read**: large text, WCAG AA contrast, obvious disabled state (user, 2026-10-31).
 - **Every page must work on phones** (from 360px wide, 44×44px tap targets, no hover-only interactions) (user, 2026-10-31).
+- **The mobile rules for Claude are written twice: appended to `PLATFORM_RULES` in `src/claude-agent.ts` and as "Every change works on phones" in `starter-canvas/CLAUDE.md`** (ticket 07): fit from 360px with no sideways scrolling, pointer events rather than mouse-only plus `touch-action` on draggable things, nothing hover-only, 44×44px tap targets, viewport meta on every page. Keep both in sync.
 - **Every Canvas change Players ask for must be playable on phones** (user, 2026-10-31). Claude is told so in the Canvas `CLAUDE.md` and platform rules, and the render check also loads candidates at phone size, rejecting only blank pages or crashes, not awkward layouts, so accidents stay part of the game.
 
 ## Security
