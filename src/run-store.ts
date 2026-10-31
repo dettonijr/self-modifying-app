@@ -41,15 +41,9 @@ export class RunStore {
       .run(run.id, run.state, JSON.stringify(saved));
   }
 
-  /** Runs that haven't finished (waiting or in progress), oldest first. */
-  unfinished(): SavedRun[] {
-    return this.select(`SELECT run FROM runs WHERE state NOT IN (${FINISHED.map(() => "?").join(", ")}) ORDER BY seq`, ...FINISHED);
-  }
-
-  /** The latest `limit` finished Runs, oldest first. */
-  recentlyFinished(limit: number): SavedRun[] {
-    const placeholders = FINISHED.map(() => "?").join(", ");
-    return this.select(`SELECT run FROM (SELECT seq, run FROM runs WHERE state IN (${placeholders}) ORDER BY seq DESC LIMIT ?) ORDER BY seq`, ...FINISHED, limit);
+  /** Every saved Run, in the order they were sent. */
+  all(): SavedRun[] {
+    return this.select("SELECT run FROM runs ORDER BY seq");
   }
 
   close(): void {

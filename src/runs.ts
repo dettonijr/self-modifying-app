@@ -3,7 +3,7 @@ import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
-import type { CanvasRepository, ChangeKind, ChangeMetadata, OriginalChange, Worktree } from "./canvas-repository.ts";
+import type { CanvasRepository, ChangeKind, ChangeMetadata, LandedChange, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
 import { rulesFor } from "./change-kinds.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
@@ -36,9 +36,21 @@ export interface RunView {
   error?: string;
   /** The commit that Landed. */
   commit?: string;
+  /**
+   * When the Prompt was sent, as an ISO 8601 timestamp. For a Landed change
+   * with no Run record, when it Landed. Absent for Runs saved before times
+   * were recorded that never Landed.
+   */
+  time?: string;
   /** What the Agent has reported so far, oldest first (the latest `MAX_PROGRESS_EVENTS`). */
   progress: RunProgress[];
 }
+
+/**
+ * What the Prompts list shows about a Run: everything but its progress (and,
+ * later, its log and changed files, which only the Run's own endpoint serves).
+ */
+export type RunSummary = Omit<RunView, "progress">;
 
 export interface RunProgress {
   message: string;
@@ -48,16 +60,17 @@ export interface RunProgress {
 /** What Console clients are told, live. */
 export type RunsEvent =
   /** The waiting Prompts, oldest first, whenever they change. */
-  | { type: "queue"; queue: RunView[] }
-  /** A Run changed state (including joining the queue). */
-  | { type: "run"; run: RunView }
+  | { type: "queue"; queue: RunSummary[] }
+  /** A Run changed state (including joining the queue): its Prompts list entry, replacing the one with the same id. */
+  | { type: "run"; run: RunSummary }
   /** The Agent reported progress on a Run. */
   | ({ type: "progress"; runId: string } & RunProgress);
 
-/** What a Console client needs on connecting: the queue, and Runs in progress or recently finished, oldest first. */
+/** What a Console client needs on connecting: the queue, oldest first, and the Prompts list. */
 export interface RunsSnapshot {
-  queue: RunView[];
-  runs: RunView[];
+  queue: RunSummary[];
+  /** Every Run, newest first (see `Runs.list()`). */
+  runs: RunSummary[];
 }
 
 const MAX_PROGRESS_EVENTS = 50;
@@ -67,7 +80,6 @@ const MAX_PROGRESS_EVENTS = 50;
  * files, so nothing tells the platform.
  */
 const WAITING_RECHECK_MS = 500;
-const MAX_RECENT_RUNS = 20;
 
 export interface PromptRequest {
   nickname: unknown;
@@ -81,7 +93,7 @@ export interface RollbackRequest {
   commit: unknown;
 }
 
-/** "Fix it to this!": send the Prompt of the change that Landed as `commit` again. */
+/** A Replay: send the Prompt of the change that Landed as `commit` again. */
 export interface ReplayRequest {
   nickname: unknown;
   commit: unknown;
@@ -116,6 +128,10 @@ export class Runs {
   private readonly worktreesDir: string;
   /** The parallel Run limit in force, read each time waiting Prompts might start. */
   private readonly maxParallelRuns: () => number;
+  /**
+   * Every Run, in the order it was sent, kept forever. Landed changes with no
+   * Run record come first: they're from before Runs were saved.
+   */
   private readonly runs = new Map<string, RunView>();
   private readonly queue: RunView[] = [];
   /**
@@ -124,8 +140,6 @@ export class Runs {
    * spending cap: they were already let in.
    */
   private readonly resuming: RunView[] = [];
-  /** Runs that have left the queue, oldest first, capped at `MAX_RECENT_RUNS` finished ones. */
-  private readonly recent: RunView[] = [];
   private readonly listeners = new Set<(event: RunsEvent) => void>();
   private closed = false;
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
@@ -147,7 +161,7 @@ export class Runs {
   start(request: PromptRequest): RunView {
     if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
-    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, progress: [] });
+    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, time: now(), progress: [] });
   }
 
   /**
@@ -184,6 +198,7 @@ export class Runs {
       model,
       kind,
       original: { commit: original.commit, nickname: original.nickname },
+      time: now(),
       progress: [],
     });
   }
@@ -197,36 +212,43 @@ export class Runs {
     this.queue.push(run);
     this.store.save(run);
     const view = copy(run);
-    this.publish({ type: "run", run: copy(run) });
+    this.publish({ type: "run", run: summary(run) });
     this.publishQueue();
     this.startWaitingRuns();
     return view;
   }
 
   /**
-   * Picks up the saved queue and Runs after a restart. Leftover worktrees are
-   * removed; Runs that were in progress start again from scratch on the latest
-   * `main`, ahead of the queue (they were already let in, so they wait for a
-   * slot but not for the spending cap); waiting Prompts are queued again in
-   * the same order.
+   * Picks up every saved Run after a restart. Leftover worktrees are removed;
+   * Runs that were in progress start again from scratch on the latest `main`,
+   * ahead of the queue (they were already let in, so they wait for a slot but
+   * not for the spending cap); waiting Prompts are queued again in the same
+   * order. Landed changes on `main` with no Run record are listed as Landed
+   * Runs, older than every saved one.
    */
   async resume(): Promise<void> {
     await this.removeLeftoverWorktrees();
-    for (const saved of this.store.recentlyFinished(MAX_RECENT_RUNS)) {
-      const run: RunView = { ...saved, progress: [] };
+    const saved = this.store.all();
+    const history = (await this.repo.history()).reverse();
+    const ids = new Set(saved.map((run) => run.id));
+    const commits = new Set(saved.flatMap((run) => (run.commit ? [run.commit] : [])));
+    for (const change of history) {
+      if ((change.run !== undefined && ids.has(change.run)) || commits.has(change.commit)) continue;
+      const run = unrecordedRun(change);
       this.runs.set(run.id, run);
-      this.recent.push(run);
     }
-    const unfinished = this.store.unfinished();
     // A Run can have Landed just before the platform stopped, without being saved as Landed.
-    const landed = unfinished.some((run) => run.state !== "waiting") ? await this.landedRuns() : new Map<string, string>();
-    for (const saved of unfinished) {
-      const run: RunView = { ...saved, progress: [] };
+    const landed = new Map(history.flatMap((change) => (change.run ? [[change.run, change] as const] : [])));
+    for (const record of saved) {
+      const run: RunView = { ...record, progress: [] };
       this.runs.set(run.id, run);
-      const commit = landed.get(run.id);
-      if (commit !== undefined) {
-        run.commit = commit;
-        this.recent.push(run);
+      if (isFinished(run.state)) {
+        if (run.time === undefined && run.commit !== undefined) run.time = history.find((change) => change.commit === run.commit)?.time;
+        continue;
+      }
+      const change = landed.get(run.id);
+      if (change !== undefined) {
+        run.commit = change.commit;
         this.setState(run, "landed");
       } else if (run.state === "waiting") this.queue.push(run);
       else this.resuming.push(run);
@@ -234,18 +256,18 @@ export class Runs {
     this.startWaitingRuns();
   }
 
-  /** The commit each Run Landed as, by Run id, from the `Run` trailers on `main`. */
-  private async landedRuns(): Promise<Map<string, string>> {
-    return new Map((await this.repo.history()).flatMap((change) => (change.run ? [[change.run, change.commit] as const] : [])));
-  }
-
   get(id: string): RunView | undefined {
     const run = this.runs.get(id);
     return run && copy(run);
   }
 
+  /** The Prompts list: every Run ever sent, whatever its kind or state, newest first. */
+  list(): RunSummary[] {
+    return [...this.runs.values()].reverse().map(summary);
+  }
+
   snapshot(): RunsSnapshot {
-    return { queue: this.queue.map(copy), runs: this.recent.map(copy) };
+    return { queue: this.queue.map(summary), runs: this.list() };
   }
 
   /** Calls `listener` with every event from now on; returns a function that stops it. */
@@ -255,7 +277,7 @@ export class Runs {
   }
 
   /** Calls `listener` with a Run each time one joins the queue or changes state. Returns a function that stops it. */
-  onChange(listener: (run: RunView) => void): () => void {
+  onChange(listener: (run: RunSummary) => void): () => void {
     return this.subscribe((event) => {
       if (event.type === "run") listener(event.run);
     });
@@ -303,7 +325,6 @@ export class Runs {
   }
 
   private startRun(run: RunView): void {
-    this.recent.push(run);
     this.setState(run, "running");
     const abort = new AbortController();
     const done = this.execute(run, abort.signal);
@@ -320,11 +341,11 @@ export class Runs {
   private setState(run: RunView, state: RunState): void {
     run.state = state;
     this.store.save(run);
-    this.publish({ type: "run", run: copy(run) });
+    this.publish({ type: "run", run: summary(run) });
   }
 
   private publishQueue(): void {
-    this.publish({ type: "queue", queue: this.queue.map(copy) });
+    this.publish({ type: "queue", queue: this.queue.map(summary) });
   }
 
   private publish(event: RunsEvent): void {
@@ -334,18 +355,6 @@ export class Runs {
       } catch (error) {
         console.error("A Runs listener failed", error);
       }
-    }
-  }
-
-  /** Drops the oldest finished Runs beyond `MAX_RECENT_RUNS`. */
-  private forgetOldRuns(): void {
-    let finished = this.recent.filter((run) => isFinished(run.state)).length;
-    for (let i = 0; i < this.recent.length && finished > MAX_RECENT_RUNS; ) {
-      const run = this.recent[i];
-      if (isFinished(run.state)) {
-        this.recent.splice(i, 1);
-        finished--;
-      } else i++;
     }
   }
 
@@ -362,7 +371,6 @@ export class Runs {
       run.error = outcome.reason;
       this.setState(run, "rejected");
     }
-    this.forgetOldRuns();
     this.startWaitingRuns();
   }
 
@@ -483,6 +491,30 @@ function needsResolving(result: LandResult): result is LandResult & { landed: fa
 function copy(run: RunView): RunView {
   return { ...run, progress: run.progress.map((progress) => ({ ...progress })) };
 }
+
+function summary(run: RunView): RunSummary {
+  const { progress: _progress, ...rest } = run;
+  return { ...rest, ...(run.original && { original: { ...run.original } }) };
+}
+
+/** A Landed change from before Runs were saved, as a Landed Run. Its id is its `Run` trailer, or else its commit. */
+function unrecordedRun(change: LandedChange): RunView {
+  const run: RunView = {
+    id: change.run ?? change.commit,
+    state: "landed",
+    nickname: change.nickname,
+    prompt: change.prompt,
+    model: change.model,
+    commit: change.commit,
+    time: change.time,
+    progress: [],
+  };
+  if (change.kind !== "Prompt") run.kind = change.kind;
+  if (change.original) run.original = { ...change.original };
+  return run;
+}
+
+const now = () => new Date().toISOString();
 
 function validate(request: PromptRequest): { nickname: string; prompt: string; model: Model } {
   const nickname = validNickname(request.nickname);

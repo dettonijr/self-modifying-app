@@ -73,7 +73,14 @@ describe("Console UI", () => {
     expect(await model.inputValue()).toBe("claude-sonnet-5-5");
   });
 
-  it("sends a Prompt with the picked model, and lists it in the history once it Lands", async () => {
+  it("has a single Prompts list, and no separate Queue, Runs or History lists", async () => {
+    const { page } = await open();
+    expect(await page.getByRole("heading", { level: 2 }).allTextContents()).toEqual(["Prompts"]);
+    expect(await page.getByTestId("prompts").count()).toBe(1);
+    for (const old of ["queue", "runs", "history"]) expect(await page.getByTestId(old).count()).toBe(0);
+  });
+
+  it("sends a Prompt with the picked model, and shows its entry with state, nickname, model, time and outcome once it Lands", async () => {
     const { page, platform, agent } = await join(await open());
     agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing</h1>"));
 
@@ -81,38 +88,56 @@ describe("Console UI", () => {
     await page.getByLabel("Model").selectOption("claude-opus-5-5");
     await page.getByRole("button", { name: "Send" }).click();
 
-    const entry = page.getByTestId("history").locator("li").first();
-    await expect.poll(() => entry.textContent(), { timeout: 10_000 }).toContain("make it snow");
-    expect(await entry.textContent()).toContain("Alice");
+    const entry = page.getByTestId("prompts").locator("li").first();
+    await expect.poll(() => entry.getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
+    expect(await entry.locator(".state").textContent()).toMatch(/landed/i);
+    expect(await entry.locator(".nickname").textContent()).toBe("Alice");
+    expect(await entry.locator(".prompt").textContent()).toBe("make it snow");
+    expect(await entry.locator(".model").textContent()).toBe("Opus 5.5");
+    expect(await entry.locator(".outcome").textContent()).toBe("Landed");
     expect(await entry.locator("time").getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(agent.tasks[0].model).toBe("claude-opus-5-5");
     expect(await (await platform.fetchCanvas("/")).text()).toContain("<h1>Snowing</h1>");
   });
 
-  it("Rolls back a change from the history only after the Player confirms, and lists the Rollback", async () => {
+  it("shortens long Prompts in the list, keeping the whole Prompt as its title", async () => {
+    const { page, platform, agent } = await join(await open());
+    const long = "make it snow " + "and then some more ".repeat(20);
+    agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing</h1>"));
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: long.trim() })).id);
+    const prompt = page.getByTestId("prompts").locator("li .prompt").first();
+    await expect.poll(() => prompt.getAttribute("title"), { timeout: 10_000 }).toBe(long.trim());
+    const shown = (await prompt.textContent())!;
+    expect(shown.length).toBeLessThan(100);
+    expect(shown).toMatch(/^make it snow .*…$/);
+  });
+
+  it("Rolls back a Landed change only after the Player confirms, and lists the Rollback", async () => {
     const { page, platform, agent } = await join(await open());
     agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
     const snowRun = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
-    const history = page.getByTestId("history");
+    const history = page.getByTestId("prompts");
     await page.reload();
     const snow = history.locator("li", { hasText: "make it snow" });
     await snow.waitFor();
 
-    await snow.getByRole("button", { name: "Roll back" }).click();
+    await snow.getByRole("button", { name: "Roll back", exact: true }).click();
     expect(await snow.textContent()).toContain("Roll back Bob's change?");
     await snow.getByRole("button", { name: "Keep it" }).click();
     expect(await snow.getByRole("button", { name: "Yes, roll back" }).count()).toBe(0);
     expect(await history.locator("li").count()).toBe(1);
 
-    await snow.getByRole("button", { name: "Roll back" }).click();
+    await snow.getByRole("button", { name: "Roll back", exact: true }).click();
     await snow.getByRole("button", { name: "Yes, roll back" }).click();
     await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
     const entry = history.locator("li").first();
-    expect(await entry.textContent()).toContain("Alice rolled back Bob's");
+    await expect.poll(() => entry.getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
+    expect(await entry.textContent()).toContain("↩ Alice rolled back Bob's");
     expect(await entry.textContent()).toContain("make it snow");
     expect(await entry.textContent()).toContain(snowRun.commit!.slice(0, 7));
-    expect(await entry.getByRole("button", { name: "Roll back" }).count()).toBe(1);
-    expect(await entry.getByRole("button", { name: "Fix it to this!" }).count()).toBe(1);
+    expect(await entry.getAttribute("data-original")).toBe(snowRun.commit);
+    expect(await entry.getByRole("button", { name: "Roll back", exact: true }).count()).toBe(1);
+    expect(await entry.getByRole("button", { name: "Replay", exact: true }).count()).toBe(1);
     expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
   });
 
@@ -144,10 +169,10 @@ describe("Console UI", () => {
     await join({ page });
     await page.getByLabel("Prompt").fill("three");
     await expect.poll(() => page.getByRole("button", { name: "Send" }).isDisabled(), { timeout: 10_000 }).toBe(true);
-    const history = page.getByTestId("history");
+    const history = page.getByTestId("prompts");
     await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
-    for (const name of ["Fix it to this!", "Roll back"]) {
-      const buttons = history.getByRole("button", { name });
+    for (const name of ["Replay", "Roll back"]) {
+      const buttons = history.getByRole("button", { name, exact: true });
       await expect.poll(() => buttons.count()).toBe(2);
       for (const button of await buttons.all()) await expect.poll(() => button.isDisabled(), { timeout: 10_000 }).toBe(true);
     }
@@ -165,7 +190,7 @@ describe("Console UI", () => {
     await expect.poll(() => page.locator("#status").textContent(), { timeout: 10_000 }).toContain("Canvas didn't render");
   });
 
-  it("shows the live queue, the Run in progress with its progress, and each Run's outcome with its reason", async () => {
+  it("shows each Prompt once, updating its entry in place from waiting to running to Landed, and keeps rejected ones with their reason", async () => {
     const { page, platform, agent } = await join(await open());
     const gate = new Gate();
     agent.enqueue(
@@ -177,29 +202,43 @@ describe("Console UI", () => {
         throw new Error("Claude gave up");
       },
     );
-    const queue = page.getByTestId("queue");
-    const runs = page.getByTestId("runs");
+    const list = page.getByTestId("prompts");
+    const snow = list.locator("li", { hasText: "make it snow" });
+    const rain = list.locator("li", { hasText: "make it rain" });
+    const noActions = async (entry: typeof snow) => {
+      for (const name of ["Replay", "Roll back"]) expect(await entry.getByRole("button", { name, exact: true }).count()).toBe(0);
+    };
 
     await page.getByLabel("Prompt").fill("make it snow");
     await page.getByRole("button", { name: "Send" }).click();
-    const snow = runs.locator("li", { hasText: "make it snow" });
-    await expect.poll(() => snow.textContent(), { timeout: 10_000 }).toContain("features/snow/snow.js");
+    await expect.poll(() => snow.getAttribute("data-state"), { timeout: 10_000 }).toBe("running");
     expect(await snow.textContent()).toContain("Alice");
-    expect(await snow.textContent()).toMatch(/running/i);
+    expect(await snow.locator(".state").textContent()).toMatch(/running/i);
+    await noActions(snow);
 
     await platform.sendPrompt({ nickname: "Bob", prompt: "make it rain" });
-    await expect.poll(() => queue.textContent()).toContain("make it rain");
-    expect(await queue.textContent()).toContain("Bob");
+    await expect.poll(() => rain.getAttribute("data-state")).toBe("waiting");
+    expect(await rain.textContent()).toContain("Bob");
+    await noActions(rain);
+    // Newest first.
+    expect(await list.locator("li").first().textContent()).toContain("make it rain");
 
     gate.release();
-    await expect.poll(() => snow.textContent(), { timeout: 10_000 }).toMatch(/landed/i);
-    await expect.poll(() => queue.locator("li").count()).toBe(0);
-    const rain = runs.locator("li", { hasText: "make it rain" });
-    await expect.poll(() => rain.textContent(), { timeout: 10_000 }).toMatch(/rejected/i);
-    expect(await rain.textContent()).toContain("Claude gave up");
+    await expect.poll(() => snow.getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
+    await expect.poll(() => rain.getAttribute("data-state"), { timeout: 10_000 }).toBe("rejected");
+    expect(await rain.locator(".outcome").textContent()).toBe("Claude gave up");
+    await noActions(rain);
+    expect(await snow.count()).toBe(1);
+    expect(await rain.count()).toBe(1);
+    expect(await list.locator("li").count()).toBe(2);
+
+    // Still there, unchanged, for a Console opened later.
+    await page.reload();
+    await expect.poll(() => rain.locator(".outcome").textContent(), { timeout: 10_000 }).toBe("Claude gave up");
+    expect(await list.locator("li").count()).toBe(2);
   });
 
-  it("shows a Run resolving, with the resolution's progress, and restarted", async () => {
+  it("shows a Run resolving and restarted in the same entry", async () => {
     const { page, agent } = await join(await open());
     const resolving = new Gate();
     const restarted = new Gate();
@@ -221,35 +260,37 @@ describe("Console UI", () => {
 
     await page.getByLabel("Prompt").fill("break the page");
     await page.getByRole("button", { name: "Send" }).click();
-    const run = page.getByTestId("runs").locator("li", { hasText: "break the page" });
-    await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/resolving/i);
-    await expect.poll(() => run.textContent()).toContain("features/fix/fix.js");
+    const run = page.getByTestId("prompts").locator("li", { hasText: "break the page" });
+    await expect.poll(() => run.locator(".state").textContent(), { timeout: 10_000 }).toMatch(/resolving/i);
     resolving.release();
-    await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/restarted/i);
+    await expect.poll(() => run.locator(".state").textContent(), { timeout: 10_000 }).toMatch(/restarted/i);
     restarted.release();
-    await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/landed/i);
+    await expect.poll(() => run.locator(".state").textContent(), { timeout: 10_000 }).toMatch(/landed/i);
+    expect(await page.getByTestId("prompts").locator("li").count()).toBe(1);
   });
 
-  it("replays a change from the history after a confirmation, with the picked model, and credits the replayer", async () => {
+  it("replays a Landed change after a confirmation, with the picked model, and credits the replayer", async () => {
     const { page, platform, agent } = await join(await open());
     agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing</h1>"));
     await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
-    const original = page.getByTestId("history").locator("li", { hasText: "make it snow" });
+    const original = page.getByTestId("prompts").locator("li", { hasText: "make it snow" });
     await expect.poll(() => original.count(), { timeout: 10_000 }).toBe(1);
 
-    await original.getByRole("button", { name: "Fix it to this!" }).click();
-    expect(await original.getByRole("button", { name: "Replay" }).isVisible()).toBe(true);
+    await original.getByRole("button", { name: "Replay", exact: true }).click();
+    expect(await original.getByRole("button", { name: "Yes, replay" }).isVisible()).toBe(true);
     await original.getByRole("button", { name: "Cancel" }).click();
-    expect(await original.getByRole("button", { name: "Replay" }).count()).toBe(0);
+    expect(await original.getByRole("button", { name: "Yes, replay" }).count()).toBe(0);
     expect(agent.tasks).toHaveLength(1);
 
     agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing again</h1>"));
-    await original.getByRole("button", { name: "Fix it to this!" }).click();
+    await original.getByRole("button", { name: "Replay", exact: true }).click();
     await original.getByLabel("Replay model").selectOption("claude-opus-5-5");
-    await original.getByRole("button", { name: "Replay" }).click();
+    await original.getByRole("button", { name: "Yes, replay" }).click();
 
-    const entry = page.getByTestId("history").locator("li").first();
-    await expect.poll(() => entry.textContent(), { timeout: 10_000 }).toContain("↻ Alice replayed Bob's");
+    const entry = page.getByTestId("prompts").locator("li").first();
+    await expect.poll(() => entry.textContent(), { timeout: 10_000 }).toContain("↻ Alice");
+    await expect.poll(() => entry.getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
+    expect(await entry.textContent()).toContain("↻ Alice replayed Bob's");
     expect(await entry.textContent()).toContain("make it snow");
     const [replayed, snow] = await (await platform.consoleApi("/api/history")).json();
     expect(await entry.getAttribute("data-original")).toBe(snow.commit);
@@ -269,7 +310,7 @@ describe("Console UI", () => {
 
     await page.getByLabel("Prompt").fill("second");
     await page.getByRole("button", { name: "Send" }).click();
-    await expect.poll(() => page.getByTestId("queue").textContent()).toContain("second");
+    await expect.poll(() => page.getByTestId("prompts").locator("li[data-state=waiting]").textContent()).toContain("second");
     await page.getByLabel("Prompt").fill("third");
     await page.getByRole("button", { name: "Send" }).click();
     await expect.poll(() => page.getByRole("status").textContent()).toMatch(/already have a Prompt waiting/);

@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { Model } from "./agent.ts";
 import { git, gitBytes, GitError } from "./git.ts";
 
-/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again ("Fix it to this!"). `Rollback`: an earlier change rolled back. */
+/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again. `Rollback`: an earlier change rolled back. */
 export const CHANGE_KINDS = ["Prompt", "Replay", "Rollback"] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 

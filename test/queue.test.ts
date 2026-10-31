@@ -112,7 +112,8 @@ describe("Live updates in the Console", () => {
     const snapshot = await late.waitFor((m) => m.type === "snapshot");
     expect(snapshot.queue).toMatchObject([{ id: second.id, nickname: "Bob", prompt: "make it rain", state: "waiting" }]);
     expect(snapshot.runs).toMatchObject([
-      { id: first.id, nickname: "Alice", state: "running", progress: [{ file: "features/snow/snow.js" }] },
+      { id: second.id, nickname: "Bob", state: "waiting" },
+      { id: first.id, nickname: "Alice", state: "running" },
     ]);
 
     gate.release();

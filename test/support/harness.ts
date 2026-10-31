@@ -29,7 +29,7 @@ export interface TestPlatform {
   fetchCanvas(canvasPath: string, init?: RequestInit): Promise<Response>;
   /** Sends a Prompt as a Player would; throws unless the Console accepts it. */
   sendPrompt(prompt: { nickname: string; prompt: string; model?: string }): Promise<RunView>;
-  /** Replays a change from the history as a Player would ("Fix it to this!"); returns the raw response. */
+  /** Replays a change from the history as a Player would; returns the raw response. */
   replay(replay: { nickname: string; commit: string; model?: string }): Promise<Response>;
   /** Connects to the Console's live updates as a Console page would. Closed with the platform. */
   live(): Promise<LiveConsole>;
