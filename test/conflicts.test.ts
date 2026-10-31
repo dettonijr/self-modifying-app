@@ -145,6 +145,46 @@ describe("Conflict handling", () => {
     expect(git(platform, ["branch", "--list"])).toBe("* main");
   });
 
+  it("shows only a rejected Run's last attempt as its change, after its fixes and restart failed", async () => {
+    const { platform, agent } = await start();
+    const { alice } = await collide(platform, agent, {
+      alice: async (run) => {
+        await run.writeFile("index.html", "<h1>Snow</h1>");
+        await run.writeFile("features/snow/first-try.js", "snow");
+      },
+      resolve: [
+        async (run) => {
+          await run.writeFile("features/snow/fix.js", "fix");
+          throw new Error("couldn't resolve it");
+        },
+        () => undefined,
+      ],
+      restart: async (run) => {
+        await run.writeFile("index.html", "<h1>Snow again</h1>\n");
+        throw new Error("gave up");
+      },
+    });
+
+    expect(await platform.waitForRun(alice.id)).toMatchObject({ state: "rejected" });
+    const files = (await (await platform.consoleApi(`/api/runs/${alice.id}`)).json()).files;
+    expect(files.map((file: { path: string }) => file.path)).toEqual(["index.html"]);
+    expect(files[0].diff).toContain("-<h1>Rain</h1>");
+    expect(files[0].diff).toContain("+<h1>Snow again</h1>");
+  });
+
+  it("shows only what Landed as a Run's change after a conflict fix", async () => {
+    const { platform, agent } = await start();
+    const { alice } = await collide(platform, agent, {
+      resolve: [async (run) => run.writeFile("index.html", "<h1>Snow and Rain</h1>\n")],
+    });
+
+    expect(await platform.waitForRun(alice.id)).toMatchObject({ state: "landed" });
+    const files = (await (await platform.consoleApi(`/api/runs/${alice.id}`)).json()).files;
+    expect(files.map((file: { path: string }) => file.path)).toEqual(["index.html"]);
+    expect(files[0].diff).toContain("-<h1>Rain</h1>");
+    expect(files[0].diff).toContain("+<h1>Snow and Rain</h1>");
+  });
+
   describe("a render-check failure takes the same path", () => {
     const blank = "<!doctype html><html><body></body></html>";
 

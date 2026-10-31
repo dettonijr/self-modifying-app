@@ -46,6 +46,11 @@ export interface RunView {
   progress: RunProgress[];
   /** The files the Agent has edited so far, from its progress events, in the order first edited. Saved with the Run. */
   editing?: string[];
+  /**
+   * The change a rejected Run last tried to make, as a unified diff, saved
+   * before its worktree is removed. Empty if it changed nothing.
+   */
+  attempted?: string;
   /** What Claude said and what the platform did, oldest first. Every entry is kept, with no limit. */
   log: LogEntry[];
 }
@@ -60,9 +65,10 @@ export interface LogEntry {
 
 /**
  * What the Prompts list shows about a Run: everything but its progress and
- * the files it's editing and its log, which only the Run's own endpoint serves.
+ * the files it's editing, its log and its attempted change, which only the
+ * Run's own endpoint serves.
  */
-export type RunSummary = Omit<RunView, "progress" | "editing" | "log">;
+export type RunSummary = Omit<RunView, "progress" | "editing" | "log" | "attempted">;
 
 export interface RunProgress {
   message: string;
@@ -405,6 +411,7 @@ export class Runs {
     if (!outcome.landed && signal.aborted) return;
     if (outcome.landed) {
       run.commit = outcome.commit;
+      delete run.attempted;
       this.setState(run, "landed");
       this.log(run, "platform", "Landed");
     } else {
@@ -435,14 +442,24 @@ export class Runs {
     }
   }
 
-  /** Runs `work` in a fresh worktree branched from `main`, and removes the worktree whatever happens. */
+  /**
+   * Runs `work` in a fresh worktree branched from `main`, and removes the
+   * worktree whatever happens, keeping the change it held as the Run's
+   * `attempted` change, so the last attempt's is the one kept.
+   */
   private async inWorktree(run: RunView, work: (worktree: Worktree) => Promise<LandResult>): Promise<LandResult> {
     let worktree: Worktree | undefined;
     try {
       worktree = await this.repo.createWorktree(path.join(this.worktreesDir, run.id), `run/${run.id}`);
       return await work(worktree);
     } finally {
-      if (worktree) await this.repo.removeWorktree(worktree).catch((error) => console.error("Couldn't remove a worktree", error));
+      if (worktree) {
+        run.attempted = await this.repo.worktreeChange(worktree).catch((error) => {
+          console.error("Couldn't read a Run's change", error);
+          return "";
+        });
+        await this.repo.removeWorktree(worktree).catch((error) => console.error("Couldn't remove a worktree", error));
+      }
     }
   }
 
@@ -553,7 +570,7 @@ function copy(run: RunView): RunView {
 }
 
 function summary(run: RunView): RunSummary {
-  const { progress: _progress, editing: _editing, log: _log, ...rest } = run;
+  const { progress: _progress, editing: _editing, log: _log, attempted: _attempted, ...rest } = run;
   return { ...rest, ...(run.original && { original: { ...run.original } }) };
 }
 
