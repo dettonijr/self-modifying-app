@@ -12,7 +12,7 @@ See spec: `.scratch/prompts-list-and-run-page/spec.md`.
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The log shows Claude's messages and the platform's steps in order, each with a timestamp
 - [ ] New entries appear live on an open Run page

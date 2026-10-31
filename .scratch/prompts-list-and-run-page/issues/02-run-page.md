@@ -16,7 +16,7 @@ See spec: `.scratch/prompts-list-and-run-page/spec.md`.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Clicking a row opens `/runs/<id>`; clicking its buttons doesn't
 - [ ] The page opens directly from its URL and links back to the Prompts list

@@ -19,7 +19,7 @@ See spec: `.scratch/prompt-tokens-and-cost/spec.md`.
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A Run's usage adds up into its list entry and Run page line with correct U, T and cost
 - [ ] The line updates live while the Run is in progress, in the list and on the Run page

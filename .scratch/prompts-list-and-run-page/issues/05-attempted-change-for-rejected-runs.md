@@ -8,7 +8,7 @@ See spec: `.scratch/prompts-list-and-run-page/spec.md`.
 
 **Blocked by:** 04
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] A rejected Run's page shows its attempted change as files with counts and diffs
 - [ ] The attempted change is still shown after a restart

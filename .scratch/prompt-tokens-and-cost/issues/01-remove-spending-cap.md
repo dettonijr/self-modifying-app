@@ -8,7 +8,7 @@ See spec: `.scratch/prompt-tokens-and-cost/spec.md`.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The Console shows no spending total and never shows a paused state
 - [ ] Prompts keep running however much has been used; queued Prompts are never held for spending

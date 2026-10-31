@@ -23,7 +23,7 @@ See spec: `.scratch/prompts-list-and-run-page/spec.md`.
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The Console has a single "Prompts" list and no separate Queue, Runs or History lists
 - [ ] A Prompt appears once and its entry moves waiting → running → Landed in place

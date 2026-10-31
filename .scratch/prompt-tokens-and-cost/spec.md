@@ -1,6 +1,6 @@
 # Spec: Tokens and cost per Prompt
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 ## Problem Statement
 

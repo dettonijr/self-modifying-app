@@ -19,7 +19,7 @@ See spec: `.scratch/prompts-list-and-run-page/spec.md` (the pages this restyles)
 
 **Blocked by:** 01, 02, 03, 04, 05
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The Console, Run page, Canvas banner and notice use Tokyo Night colours, all from one palette file of named variables
 - [ ] Changing a value in the palette file changes it on every platform page (tested by swapping one variable)

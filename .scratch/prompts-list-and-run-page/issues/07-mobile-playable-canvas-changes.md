@@ -11,7 +11,7 @@ See `DECISIONS.md` (Look and feel; Render check).
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The starter Canvas `CLAUDE.md` and the Agent's platform rules contain the mobile rules
 - [ ] The starter Canvas has a mobile viewport meta tag and fits a 390px-wide screen without scrolling sideways

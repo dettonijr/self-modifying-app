@@ -12,7 +12,7 @@ See spec: `.scratch/prompts-list-and-run-page/spec.md`.
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] File names appear on an open Run page while the Run is in progress, updating live
 - [ ] In-progress file names survive a page reload
