@@ -91,4 +91,56 @@ describe("A Run's changed files", () => {
     // A Run's page opened by its Landed commit shows the same.
     expect(await runFiles(platform, run.commit!)).toEqual(files);
   });
+
+  it("lists a rejected Run's attempted change with line counts and diffs, saved before its worktree is removed", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue(async (run) => {
+      await run.writeFile("features/snow/snow.js", "one\ntwo\n");
+      await run.writeFile("index.html", "<h1>Snow</h1>\n");
+      throw new Error("ran out of snow");
+    });
+    const run = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    expect(run.state).toBe("rejected");
+
+    const files = await runFiles(platform, run.id);
+    expect(files.map(({ path, added }: { path: string; added: number }) => ({ path, added }))).toEqual([
+      { path: "features/snow/snow.js", added: 2 },
+      { path: "index.html", added: 1 },
+    ]);
+    expect(files[1].removed).toBeGreaterThan(0);
+    expect(files[0].diff.split("\n")).toEqual(expect.arrayContaining(["diff --git a/features/snow/snow.js b/features/snow/snow.js", "+one", "+two"]));
+    expect(files[1].diff).toContain("+<h1>Snow</h1>");
+    // The Prompts list stays light: no attempted change in summaries.
+    expect(JSON.stringify(await (await platform.consoleApi("/api/runs")).json())).not.toContain("+one");
+  });
+
+  it("still lists a rejected Run's attempted change after a restart", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "sma-files-"));
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+    const { platform, agent } = await start({ dataDir });
+    agent.enqueue(async (run) => {
+      await run.writeFile("features/snow/snow.js", "snow\n");
+      throw new Error("ran out of snow");
+    });
+    const { id } = await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" });
+    expect((await platform.waitForRun(id)).state).toBe("rejected");
+    const before = await runFiles(platform, id);
+    await platform.close();
+    platforms.splice(platforms.indexOf(platform), 1);
+
+    const { platform: restarted } = await start({ dataDir, agent: new FakeAgent() });
+    const after = await runFiles(restarted, id);
+    expect(after).toEqual(before);
+    expect(after).toMatchObject([{ path: "features/snow/snow.js", added: 1, removed: 0 }]);
+  });
+
+  it("lists no files for a Run rejected before it changed anything", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue(async () => {
+      throw new Error("no snow today");
+    });
+    const run = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    expect(run.state).toBe("rejected");
+    expect(await runFiles(platform, run.id)).toEqual([]);
+  });
 });

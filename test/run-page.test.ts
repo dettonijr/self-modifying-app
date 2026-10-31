@@ -284,4 +284,30 @@ describe("The Run page", () => {
     await expect.poll(() => page.getByTestId("run").getAttribute("data-state"), { timeout: 10_000 }).toBe("rejected");
     expect(await page.getByRole("link", { name: "View the Canvas at this version" }).count()).toBe(0);
   });
+
+  it("lists a rejected Run's attempted change with counts and diffs, and \"No changes\" if it changed nothing", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue(
+      async (run) => {
+        await run.writeFile("features/snow/snow.js", "one\ntwo\n");
+        throw new Error("Claude gave up");
+      },
+      () => {
+        throw new Error("Claude gave up at once");
+      },
+    );
+    const tried = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const untouched = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it hail" })).id);
+    const page = await newPage(platform);
+
+    await page.goto(`${platform.consoleUrl}/runs/${tried.id}`);
+    const files = page.getByTestId("files").locator(".file");
+    await expect.poll(() => files.locator(".path").allTextContents(), { timeout: 10_000 }).toEqual(["features/snow/snow.js"]);
+    expect(await files.locator(".additions").textContent()).toBe("+2");
+    await files.locator(".path").click();
+    expect(await files.locator(".diff .line.added").allTextContents()).toEqual(["+one", "+two"]);
+
+    await page.goto(`${platform.consoleUrl}/runs/${untouched.id}`);
+    await expect.poll(() => page.getByTestId("files").textContent(), { timeout: 10_000 }).toContain("No changes");
+  });
 });

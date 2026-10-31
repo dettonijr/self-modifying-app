@@ -207,6 +207,17 @@ export class CanvasRepository {
     }
   }
 
+  /**
+   * The change a worktree holds, committed or not, as a unified diff against
+   * the `main` commit it sits on (as `diff` writes it). Stages everything to
+   * see new files, so call it only on a worktree about to be removed.
+   */
+  async worktreeChange(worktree: Worktree): Promise<string> {
+    await git(worktree.dir, ["add", "--all"]);
+    const base = await git(worktree.dir, ["merge-base", "HEAD", "main"]);
+    return git(worktree.dir, ["diff", "--cached", "--no-color", "--no-renames", base]);
+  }
+
   /** What `commit` changed, as a unified diff, with renames shown as a deletion and an addition. */
   diff(commit: string): Promise<string> {
     return git(this.dir, ["show", "--format=", "--no-color", "--no-renames", commit]);

@@ -15,11 +15,12 @@ export interface ChangedFile {
 
 /**
  * The files a Run changed: those it's editing while in progress, those its
- * commit changed once Landed (read from git). Other Runs show the names they
- * edited for now.
+ * commit changed once Landed (read from git), and the change it last tried
+ * once rejected (saved with the Run).
  */
 export async function changedFilesOf(run: RunView, repo: CanvasRepository): Promise<ChangedFile[]> {
   if (run.state === "landed" && run.commit !== undefined) return changedFiles(await repo.diff(run.commit));
+  if (run.state === "rejected") return changedFiles(run.attempted ?? "");
   return (run.editing ?? []).map((file) => ({ path: file }));
 }
 
