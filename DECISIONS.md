@@ -45,6 +45,13 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The reload notice survives the reload through `sessionStorage`** and shows for 6 seconds (ticket 04).
 - **Known limitation: if a Land deletes the page a viewer is on, the reload ends at a 404** (ticket 04).
 
+## Landing
+
+- **The Lander lands one Run at a time, in the order Runs reach `land()`, using a chain of promises** (ticket 06). Each Land: commit the worktree, read the current `main`, rebase with `CanvasRepository.rebaseWorktree(worktree, onto)`, run the render check, then move `main` with the compare-and-swap, expecting the `main` it rebased onto.
+- **`LandFailure` is `"unchanged" | "conflict" | "render"`** (ticket 06). A conflicting rebase is aborted and returns `conflict`, with the message "The change conflicts with one that Landed while it was being made". Ticket 08 builds its handling on this.
+- **Test pitfall: `FakeAgent` hands out scripts in the order Runs start, and worktree creation can reorder them under load** (ticket 06). Tests that hold a specific Run must wait with `agent.started(n)` before sending the next Prompt, or pick behaviour from `run.task.instructions`.
+- **Tests that assume one Run at a time set `maxParallelRuns: 1`** (ticket 06), e.g. `queue.test.ts` and `console-ui.test.ts`.
+
 ## Render check
 
 - **The render check is its own step in the Lander** (ticket 07): commit the worktree, run the check, then move `main`. Failures return `failure: "render"` (reason "Canvas didn't render") or `failure: "unchanged"`; ticket 08 routes on `failure`. The specific problem is only logged with `console.warn`; Players see "Canvas didn't render".
@@ -55,10 +62,9 @@ Newest entries at the bottom. Each entry notes where it came from.
 
 ## Queue and the Console WebSocket
 
-- **The parallel Run limit lives only in `MAX_PARALLEL_RUNS` in `src/runs.ts`** (ticket 05). Waiting Prompts start oldest first in `Runs.startWaitingRuns()`. `RunState` starts with `waiting`.
+- **The parallel Run limit is the `MAX_PARALLEL_RUNS` environment variable, default 3 (`DEFAULT_MAX_PARALLEL_RUNS` in `src/runs.ts`)** (tickets 05, 06). It must be a whole number of at least 1 or the platform won't start, reaches `Runs` through the `maxParallelRuns` option, and only changes on restart. Waiting Prompts start oldest first in `Runs.startWaitingRuns()`. `RunState` starts with `waiting`.
 - **One waiting Prompt per Player is an exact match on the trimmed nickname** (ticket 05). A second one gets 409 with reason `already-waiting`. The slot frees as soon as the Prompt starts running.
-- **The queue is in memory only until ticket 13**, so a shutdown drops waiting Prompts.
-- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending.
+- **Queued Prompts don't start while the Console is paused by the spending cap** (orchestrator decision, built in ticket 06). They stay waiting and start once the cap is raised. Without this, Prompts queued before the cap was reached would keep spending. Because `raise-cap` only writes a file, `startWaitingRuns()` re-checks every 500 ms while paused (`PAUSED_RECHECK_MS`), so waiting Prompts start within about half a second of a raise.
 - **The Console WebSocket is `/api/live`, using the `ws` package** (ticket 05). On connecting, a client gets `{type:"snapshot", queue, runs}`, then `queue`, `run` (every state change) and `progress` messages. The snapshot holds Runs in progress plus the last 20 finished; each Run view keeps its latest 50 progress events. Types are `RunsEvent` and `RunsSnapshot` in `runs.ts`.
 - **`Runs.subscribe(listener)` gets every Run event** (ticket 05). Ticket 04's `onChange` wraps it, so it also fires for `waiting`, which the Canvas channel ignores.
 - **WebSocket upgrades go through `isCrossOrigin()` (403) and get 404 for any other path** (ticket 05). Any future WebSocket must do the same.
@@ -78,6 +84,16 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **There are no atomic operations, so a concurrent `get` then `set` can lose an update** (ticket 11). The Canvas `CLAUDE.md` tells Claude to use one key per contribution plus `list()` for tallies. An `increment` operation could be added later if needed.
 - **Each render check gets its own channel and an empty in-memory store** (ticket 11), so a candidate page can't change real data. Features see no stored data during the check, which is fine because a feature's own errors don't fail it.
 - **`readJson(req, maxBytes)` and `sendJson` live in `http.ts`** (ticket 11) for reuse by any server.
+
+## Restarts
+
+- **The queue and Run records are saved in `<data>/runs.sqlite`** (ticket 13, `RunStore` in `src/run-store.ts`, `node:sqlite` in WAL mode), separate from `services.sqlite`. One row per Run: `seq` (send order), `id`, `state` as plain text with no constraint, and the rest of the Run as JSON without progress. New states and fields need no schema change, but **a new finished state must be added to `FINISHED` in `run-store.ts`**; anything else counts as unfinished.
+- **Every state change is saved by `Runs.setState`**, plus once when a Prompt is queued (ticket 13). Always change state through `setState`.
+- **`Runs.resume()` runs at startup, before the servers listen** (ticket 13): remove all leftover worktrees and `run/*` branches; reload the 20 most recently finished Runs; restart unfinished Runs from scratch on the latest `main` with the same id and Prompt; re-queue waiting Prompts in order.
+- **Restarted Runs skip the parallel limit and the spending pause** (ticket 13), matching the rule that Runs in progress are never stopped. Their tokens are spent again, and earlier progress events are lost.
+- **Agents must fail when aborted, never return success** (ticket 13). `close()` aborts Runs; one that doesn't Land stays saved as in progress and restarts on the next start.
+- **Known limitation: if the process is killed after `main` moves but before `landed` is saved, the Prompt runs again after restart and can Land twice** (ticket 13). Fix if needed: add a `Run:` trailer to commits and check history in `resume()`.
+- **`Runs` needs a `store: RunStore` in its constructor** (ticket 13).
 
 ## Spending cap
 
