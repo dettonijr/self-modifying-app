@@ -9,6 +9,8 @@ export interface FakeAgentContext {
   writeFile(relativePath: string, contents: string): Promise<void>;
   deleteFile(relativePath: string): Promise<void>;
   progress(message: string, file?: string): void;
+  /** Says something as Claude would, for the Run's log. */
+  message(text: string): void;
   usage(usage: TokenUsage): void;
   /** Resolves when the task's signal is aborted; await it to simulate hanging. */
   aborted(): Promise<void>;
@@ -59,6 +61,7 @@ export class FakeAgent implements Agent {
         events.push({ type: "progress", message: `Deleting ${relativePath}`, file: relativePath });
       },
       progress: (message, file) => events.push({ type: "progress", message, file }),
+      message: (text) => events.push({ type: "message", text }),
       usage: (usage) => events.push({ type: "usage", usage }),
       aborted: () =>
         new Promise((resolve) => {

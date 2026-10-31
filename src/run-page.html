@@ -19,6 +19,12 @@
     .confirm { background: #f4f4f4; padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
     .empty { color: #666; }
     .paused { background: #fff4e5; border: 1px solid #f0b54a; padding: 0.75rem 1rem; border-radius: 0.25rem; }
+    .entries { list-style: none; padding: 0; margin: 0; }
+    .entries li { padding: 0.25rem 0; border-bottom: 1px solid #eee; }
+    .entries time { color: #666; font-size: 0.85em; font-variant-numeric: tabular-nums; }
+    .entries .source { font-size: 0.8em; font-weight: bold; text-transform: uppercase; letter-spacing: 0.05em; color: #666; }
+    .entries [data-source="claude"] .source { color: #5a3fc0; }
+    .entries .text { white-space: pre-wrap; overflow-wrap: anywhere; }
     [hidden] { display: none !important; }
   </style>
 </head>
@@ -71,11 +77,41 @@
      */
     const logSection = {
       element: $("log").querySelector(".body"),
+      entries: undefined,
+      // Every entry shown, so one that was both fetched and sent live appears once.
+      shown: new Set(),
       render(run) {
-        if (!run.log?.length) this.element.replaceChildren(span("empty", "No log recorded"));
+        this.shown = new Set((run.log ?? []).map(entryKey));
+        if (!run.log?.length) {
+          this.entries = undefined;
+          return this.element.replaceChildren(span("empty", "No log recorded"));
+        }
+        this.entries = document.createElement("ol");
+        this.entries.className = "entries";
+        this.entries.append(...run.log.map(logEntry));
+        this.element.replaceChildren(this.entries);
       },
-      live(_message) {},
+      live(message) {
+        if (message.type !== "log" || this.shown.has(entryKey(message.entry))) return;
+        this.shown.add(entryKey(message.entry));
+        if (this.entries === undefined) this.render({ log: [message.entry] });
+        else this.entries.append(logEntry(message.entry));
+      },
     };
+
+    const entryKey = ({ time, source, text }) => JSON.stringify([time, source, text]);
+
+    /** One line of the log: its time, who it's from (Claude or the platform) and what was said or done. */
+    function logEntry({ time, source, text }) {
+      const item = document.createElement("li");
+      item.dataset.source = source;
+      const when = document.createElement("time");
+      when.dateTime = time;
+      when.textContent = new Date(time).toLocaleTimeString();
+      when.title = new Date(time).toLocaleString();
+      item.append(when, " ", span("source", source === "claude" ? "Claude" : "Platform"), " ", span("text", text));
+      return item;
+    }
 
     const filesSection = {
       element: $("files").querySelector(".body"),
@@ -90,19 +126,29 @@
       $("status").className = isError ? "error" : "";
     }
 
+    // Live messages that arrive while the Run is being fetched; handled once it has been, so none is missed.
+    let pending;
+
     async function load() {
-      const response = await fetch(`/api/runs/${encodeURIComponent(requested)}`);
-      if (response.status === 404) {
-        document.title = "No such Run";
-        $("missing").hidden = false;
-        $("run").hidden = true;
-        return;
+      pending = [];
+      try {
+        const response = await fetch(`/api/runs/${encodeURIComponent(requested)}`);
+        if (response.status === 404) {
+          document.title = "No such Run";
+          $("missing").hidden = false;
+          $("run").hidden = true;
+          return;
+        }
+        if (!response.ok) return setStatus("Couldn't load this Run; retrying…", true);
+        run = await response.json();
+        renderDetails();
+        for (const section of sections) section.render(run);
+        $("run").hidden = false;
+      } finally {
+        const missed = pending;
+        pending = undefined;
+        for (const message of missed) handleLive(message);
       }
-      if (!response.ok) return setStatus("Couldn't load this Run; retrying…", true);
-      run = await response.json();
-      renderDetails();
-      for (const section of sections) section.render(run);
-      $("run").hidden = false;
     }
 
     /** The same details as the Run's Prompts list entry, with the whole Prompt, plus Replay and Roll back once Landed. */
@@ -144,6 +190,7 @@
     function handleLive(message) {
       // Reconnected: fetch the whole Run again, in case something was missed.
       if (message.type === "snapshot") return void load();
+      if (pending) return void pending.push(message);
       if (run === undefined) return;
       if (message.type === "run" && message.run.id === run.id) {
         const finished = isFinished(message.run) && !isFinished(run);

@@ -1,5 +1,9 @@
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { FakeAgent, Gate } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform, type TestPlatformOptions } from "./support/harness.ts";
 
@@ -43,7 +47,7 @@ describe("The Run page", () => {
     expect(await details.locator(".prompt").textContent()).toBe(long);
     expect(await details.locator(".model").textContent()).toBe("Opus 5.5");
     expect(await details.locator(".outcome").textContent()).toBe("Landed");
-    expect(await details.locator("time").getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(await details.locator(".details time").getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
     await page.getByRole("link", { name: "← Prompts" }).click();
     await page.waitForURL(platform.consoleUrl + "/");
@@ -70,7 +74,7 @@ describe("The Run page", () => {
     await expect.poll(() => page.getByTestId("run").getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
   });
 
-  it("updates live while the Run is in progress, and says when there's no log recorded", async () => {
+  it("updates live while the Run is in progress, and its log ends with the rejection reason", async () => {
     const { platform, agent } = await start();
     const gate = new Gate();
     agent.enqueue(
@@ -97,7 +101,62 @@ describe("The Run page", () => {
     expect(await details.getAttribute("data-state")).toBe("rejected");
     expect(await details.locator(".state").textContent()).toMatch(/rejected/i);
     for (const name of ["Replay", "Roll back"]) expect(await page.getByRole("button", { name, exact: true }).count()).toBe(0);
-    expect(await page.getByTestId("log").textContent()).toContain("No log recorded");
+    await expect.poll(() => page.getByTestId("log").locator("li").last().textContent(), { timeout: 10_000 }).toContain("Rejected: Claude gave up");
+  });
+
+  it("shows the log of what Claude said and what the platform did, timestamped and appended live", async () => {
+    const { platform, agent } = await start();
+    const gate = new Gate();
+    agent.enqueue(async (run) => {
+      run.message("I'll add some snow.");
+      await gate.wait();
+      await run.writeFile("features/snow/snow.js", "snow");
+      run.message("Done: it snows now.");
+    });
+    const run = await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" });
+    await agent.started(1);
+
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${run.id}`);
+    const entries = page.getByTestId("log").locator("li");
+    const shown = async () =>
+      entries.evaluateAll((items) => items.map((item) => `${item.getAttribute("data-source")}: ${item.querySelector(".text")?.textContent}`));
+    await expect.poll(shown, { timeout: 10_000 }).toEqual(["platform: Queued", "platform: Started", "claude: I'll add some snow."]);
+
+    gate.release();
+    await expect.poll(shown, { timeout: 10_000 }).toEqual([
+      "platform: Queued",
+      "platform: Started",
+      "claude: I'll add some snow.",
+      "claude: Done: it snows now.",
+      "platform: Rebasing onto the latest Canvas",
+      "platform: Checking that the Canvas renders",
+      "platform: Landed",
+    ]);
+    for (const time of await entries.locator("time").all()) {
+      expect(await time.getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect((await time.textContent())?.trim()).not.toBe("");
+    }
+    expect(await page.getByTestId("log").textContent()).not.toContain("No log recorded");
+  });
+
+  it("says \"No log recorded\" for a Landed change from before Runs were saved", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "sma-run-page-"));
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+    const seeded = await start({ dataDir });
+    await seeded.platform.close();
+    platforms.splice(platforms.indexOf(seeded.platform), 1);
+    const canvas = path.join(dataDir, "canvas");
+    await writeFile(path.join(canvas, "old.js"), "old");
+    const gitIn = (...args: string[]) => execFileSync("git", ["-c", "user.name=Platform", "-c", "user.email=platform@example.com", ...args], { cwd: canvas, encoding: "utf8" }).trim();
+    gitIn("add", "old.js");
+    gitIn("commit", "--quiet", "-m", "Prompt by Olga: make it old\n\nmake it old\n\nKind: Prompt\nNickname: Olga\nModel: claude-opus-5-5");
+    const old = gitIn("rev-parse", "HEAD");
+
+    const { platform } = await start({ dataDir });
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${old}`);
+    await expect.poll(() => page.getByTestId("log").textContent(), { timeout: 10_000 }).toContain("No log recorded");
   });
 
   it("replays a Landed Run after a confirmation, and the Replay's page names and links its original", async () => {

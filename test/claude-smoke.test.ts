@@ -15,7 +15,7 @@ describe.skipIf(!enabled)("The real Claude Agent (smoke test)", () => {
     await platform?.close();
   });
 
-  it("Lands \"change the title to Hello\"", { timeout: 300_000 }, async () => {
+  it("Lands \"change the title to Hello\", with Claude's messages in the Run's log", { timeout: 300_000 }, async () => {
     platform = await startTestPlatform({ agent: agentFromEnvironment(process.env) });
 
     const run = await platform.sendPrompt({ nickname: "Smoke", prompt: "change the title to Hello" });
@@ -23,5 +23,7 @@ describe.skipIf(!enabled)("The real Claude Agent (smoke test)", () => {
     expect(await platform.waitForRun(run.id)).toMatchObject({ state: "landed" });
     const page = await (await platform.fetchCanvas("/index.html")).text();
     expect(page).toMatch(/<h1[^>]*>\s*Hello\s*<\/h1>|<title>\s*Hello\s*<\/title>/);
+    const { log } = (await (await platform.consoleApi(`/api/runs/${run.id}`)).json()) as { log: Array<{ source: string; text: string }> };
+    expect(log.filter((entry) => entry.source === "claude").length).toBeGreaterThan(0);
   });
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository, ChangeKind, ChangeMetadata, LandedChange, OriginalChange, Worktree } from "./canvas-repository.ts";
-import type { Lander, LandResult } from "./lander.ts";
+import type { Lander, LandResult, LandStep } from "./lander.ts";
 import { rulesFor } from "./change-kinds.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
 import { DEFAULT_MAX_PARALLEL_RUNS } from "./parallel-limit.ts";
@@ -44,13 +44,23 @@ export interface RunView {
   time?: string;
   /** What the Agent has reported so far, oldest first (the latest `MAX_PROGRESS_EVENTS`). */
   progress: RunProgress[];
+  /** What Claude said and what the platform did, oldest first. Every entry is kept, with no limit. */
+  log: LogEntry[];
+}
+
+/** One line of a Run's log. */
+export interface LogEntry {
+  /** When it happened, as an ISO 8601 timestamp. */
+  time: string;
+  source: "claude" | "platform";
+  text: string;
 }
 
 /**
- * What the Prompts list shows about a Run: everything but its progress (and,
- * later, its log and changed files, which only the Run's own endpoint serves).
+ * What the Prompts list shows about a Run: everything but its progress and
+ * log (and, later, its changed files), which only the Run's own endpoint serves.
  */
-export type RunSummary = Omit<RunView, "progress">;
+export type RunSummary = Omit<RunView, "progress" | "log">;
 
 export interface RunProgress {
   message: string;
@@ -64,7 +74,9 @@ export type RunsEvent =
   /** A Run changed state (including joining the queue): its Prompts list entry, replacing the one with the same id. */
   | { type: "run"; run: RunSummary }
   /** The Agent reported progress on a Run. */
-  | ({ type: "progress"; runId: string } & RunProgress);
+  | ({ type: "progress"; runId: string } & RunProgress)
+  /** A new entry at the end of a Run's log. */
+  | { type: "log"; runId: string; entry: LogEntry };
 
 /** What a Console client needs on connecting: the queue, oldest first, and the Prompts list. */
 export interface RunsSnapshot {
@@ -74,6 +86,13 @@ export interface RunsSnapshot {
 }
 
 const MAX_PROGRESS_EVENTS = 50;
+
+/** What the log says as each step of Landing begins. */
+const LAND_STEP_TEXT: Record<LandStep, string> = {
+  rebasing: "Rebasing onto the latest Canvas",
+  "render-check": "Checking that the Canvas renders",
+};
+export const RESTARTED_LOG_TEXT = "Platform restarted, starting over";
 /**
  * While Prompts are waiting, how often to check whether the host raised the
  * spending cap or the parallel Run limit. The host's commands only write
@@ -161,7 +180,7 @@ export class Runs {
   start(request: PromptRequest): RunView {
     if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
-    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, time: now(), progress: [] });
+    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, time: now(), progress: [], log: [] });
   }
 
   /**
@@ -200,6 +219,7 @@ export class Runs {
       original: { commit: original.commit, nickname: original.nickname },
       time: now(),
       progress: [],
+      log: [],
     });
   }
 
@@ -211,8 +231,9 @@ export class Runs {
     this.runs.set(run.id, run);
     this.queue.push(run);
     this.store.save(run);
-    const view = copy(run);
     this.publish({ type: "run", run: summary(run) });
+    this.log(run, "platform", "Queued");
+    const view = copy(run);
     this.publishQueue();
     this.startWaitingRuns();
     return view;
@@ -240,7 +261,7 @@ export class Runs {
     // A Run can have Landed just before the platform stopped, without being saved as Landed.
     const landed = new Map(history.flatMap((change) => (change.run ? [[change.run, change] as const] : [])));
     for (const record of saved) {
-      const run: RunView = { ...record, progress: [] };
+      const run: RunView = { ...record, progress: [], log: record.log ?? [] };
       this.runs.set(run.id, run);
       if (isFinished(run.state)) {
         if (run.time === undefined && run.commit !== undefined) run.time = history.find((change) => change.commit === run.commit)?.time;
@@ -250,8 +271,12 @@ export class Runs {
       if (change !== undefined) {
         run.commit = change.commit;
         this.setState(run, "landed");
+        this.log(run, "platform", "Landed");
       } else if (run.state === "waiting") this.queue.push(run);
-      else this.resuming.push(run);
+      else {
+        this.log(run, "platform", RESTARTED_LOG_TEXT);
+        this.resuming.push(run);
+      }
     }
     this.startWaitingRuns();
   }
@@ -327,6 +352,7 @@ export class Runs {
 
   private startRun(run: RunView): void {
     this.setState(run, "running");
+    this.log(run, "platform", "Started");
     const abort = new AbortController();
     const done = this.execute(run, abort.signal);
     this.inProgress.set(run.id, { abort, done });
@@ -343,6 +369,14 @@ export class Runs {
     run.state = state;
     this.store.save(run);
     this.publish({ type: "run", run: summary(run) });
+  }
+
+  /** Adds an entry to the end of the Run's log, saves it and tells Console clients. */
+  private log(run: RunView, source: LogEntry["source"], text: string): void {
+    const entry: LogEntry = { time: now(), source, text };
+    run.log.push(entry);
+    this.store.appendLog(run.id, entry);
+    this.publish({ type: "log", runId: run.id, entry: { ...entry } });
   }
 
   private publishQueue(): void {
@@ -368,9 +402,11 @@ export class Runs {
     if (outcome.landed) {
       run.commit = outcome.commit;
       this.setState(run, "landed");
+      this.log(run, "platform", "Landed");
     } else {
       run.error = outcome.reason;
       this.setState(run, "rejected");
+      this.log(run, "platform", `Rejected: ${outcome.reason}`);
     }
     this.startWaitingRuns();
   }
@@ -385,6 +421,7 @@ export class Runs {
       const first = await this.inWorktree(run, (worktree) => this.workAndResolve(run, worktree, signal));
       if (first.landed || !needsResolving(first) || signal.aborted) return first;
       this.setState(run, "restarted");
+      this.log(run, "platform", "Starting over from the latest Canvas");
       const restart = await this.inWorktree(run, (worktree) => this.workOnce(run, worktree, signal));
       if (restart.landed || restart.failure !== "conflict") return restart;
       return { ...restart, reason: COLLIDED_MESSAGE };
@@ -418,7 +455,7 @@ export class Runs {
       if (failure !== undefined) return { landed: false, reason: failure };
     }
     this.setState(run, "landing");
-    const result = await this.lander.land(worktree, this.change(run));
+    const result = await this.land(run, worktree);
     if (mechanical && !result.landed && result.failure === "unchanged" && rules.nothingToDo) return { ...result, reason: rules.nothingToDo };
     return result;
   }
@@ -430,9 +467,11 @@ export class Runs {
     let change = await this.repo.head(worktree);
     for (let attempt = 0; attempt < MAX_RESOLUTION_ATTEMPTS && needsResolving(result) && !signal.aborted; attempt++) {
       this.setState(run, "resolving");
+      const problem = result.failure === "conflict" ? "a conflict" : "a render failure";
+      this.log(run, "platform", `Fixing ${problem} (attempt ${attempt + 1} of ${MAX_RESOLUTION_ATTEMPTS})`);
       if (!(await this.resolve(run, worktree, change, result, signal))) continue;
       this.setState(run, "landing");
-      result = await this.lander.land(worktree, this.change(run));
+      result = await this.land(run, worktree);
       if (!result.landed) change = await this.repo.head(worktree);
     }
     return result;
@@ -461,6 +500,11 @@ export class Runs {
     return !(await hasConflictMarkers(worktree.dir, conflicts));
   }
 
+  /** Lands the Run's change, logging each step. */
+  private land(run: RunView, worktree: Worktree): Promise<LandResult> {
+    return this.lander.land(worktree, this.change(run), (step) => this.log(run, "platform", LAND_STEP_TEXT[step]));
+  }
+
   private change(run: RunView): ChangeMetadata {
     const change: ChangeMetadata = { kind: run.kind ?? "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model, run: run.id };
     if (run.original) change.original = run.original;
@@ -478,6 +522,7 @@ export class Runs {
         if (run.progress.length > MAX_PROGRESS_EVENTS) run.progress.shift();
         this.publish({ type: "progress", runId: run.id, ...progress });
       }
+      if (event.type === "message" && event.text.trim() !== "") this.log(run, "claude", event.text);
       if (event.type === "result") return event.outcome === "failure" ? event.error : undefined;
     }
     return "The Agent stopped without a result";
@@ -490,11 +535,11 @@ function needsResolving(result: LandResult): result is LandResult & { landed: fa
 }
 
 function copy(run: RunView): RunView {
-  return { ...run, progress: run.progress.map((progress) => ({ ...progress })) };
+  return { ...run, progress: run.progress.map((progress) => ({ ...progress })), log: run.log.map((entry) => ({ ...entry })) };
 }
 
 function summary(run: RunView): RunSummary {
-  const { progress: _progress, ...rest } = run;
+  const { progress: _progress, log: _log, ...rest } = run;
   return { ...rest, ...(run.original && { original: { ...run.original } }) };
 }
 
@@ -509,6 +554,7 @@ function unrecordedRun(change: LandedChange): RunView {
     commit: change.commit,
     time: change.time,
     progress: [],
+    log: [],
   };
   if (change.kind !== "Prompt") run.kind = change.kind;
   if (change.original) run.original = { ...change.original };

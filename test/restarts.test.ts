@@ -121,7 +121,7 @@ describe("Surviving restarts", () => {
     expect(execFileSync("git", ["log", "-1", "--format=%(trailers:key=Run,valueonly)", "main"], { cwd: canvas, encoding: "utf8" }).trim()).toBe(snow.id);
     // As if the process was killed between moving main and saving the Run as Landed.
     const store = new RunStore(path.join(dataDir, "runs.sqlite"));
-    const { commit: _commit, ...unsaved } = { ...snow, state: "landing" as const, progress: [] };
+    const { commit: _commit, ...unsaved } = { ...snow, state: "landing" as const, progress: [], log: [] };
     store.save(unsaved as Parameters<RunStore["save"]>[0]);
     store.close();
 
@@ -169,6 +169,55 @@ describe("Surviving restarts", () => {
     });
     expect(refused.status).toBe(409);
     gate.release();
+  });
+
+  it("keeps every Run's whole log, and a resumed Run continues its log after a \"Platform restarted\" line", async () => {
+    const dataDir = await dataFolder();
+    const before = await start(dataDir);
+    const long = "snow ".repeat(20_000).trim();
+    before.agent.enqueue(
+      async (run) => {
+        run.message(long);
+        await run.writeFile("features/snow/snow.js", "snow");
+      },
+      async (run) => {
+        run.message("Starting on the rain.");
+        await interruptedByRestart(run);
+      },
+    );
+    const snow = await before.platform.waitForRun((await before.platform.sendPrompt({ nickname: "Alice", prompt: "make it snow" })).id);
+    const rain = await before.platform.sendPrompt({ nickname: "Bob", prompt: "make it rain" });
+    await before.agent.started(2);
+    await before.platform.close();
+
+    const after = await start(dataDir);
+    after.agent.enqueue(async (run) => {
+      run.message("Trying the rain again.");
+      await run.writeFile("features/rain/rain.js", "rain");
+    });
+    await after.platform.waitForRun(rain.id);
+
+    const logOf = async (id: string) =>
+      ((await (await after.platform.consoleApi(`/api/runs/${id}`)).json()) as { log: Array<{ source: string; text: string }> }).log.map(({ source, text }) => `${source}: ${text}`);
+    expect(await logOf(snow.id)).toEqual([
+      "platform: Queued",
+      "platform: Started",
+      `claude: ${long}`,
+      "platform: Rebasing onto the latest Canvas",
+      "platform: Checking that the Canvas renders",
+      "platform: Landed",
+    ]);
+    expect(await logOf(rain.id)).toEqual([
+      "platform: Queued",
+      "platform: Started",
+      "claude: Starting on the rain.",
+      "platform: Platform restarted, starting over",
+      "platform: Started",
+      "claude: Trying the rain again.",
+      "platform: Rebasing onto the latest Canvas",
+      "platform: Checking that the Canvas renders",
+      "platform: Landed",
+    ]);
   });
 });
 

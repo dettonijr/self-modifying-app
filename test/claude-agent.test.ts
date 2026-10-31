@@ -157,6 +157,28 @@ describe("The Claude Agent", () => {
     expect(events.at(-1)).toEqual({ type: "result", outcome: "success" });
   });
 
+  it("reports Claude's text replies as messages, but never tool calls, tool results or hidden reasoning", async () => {
+    const worktree = await tempWorktree();
+    const { query } = fakeQuery(async function* () {
+      yield assistant("m1", [
+        { type: "thinking", thinking: "secret reasoning", signature: "sig" },
+        { type: "text", text: "I'll add some snow." },
+        { type: "tool_use", id: "t1", name: "Write", input: { file_path: path.join(worktree, "snow.js"), content: "tool input" } },
+      ]);
+      yield msg({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "tool output" }] }, parent_tool_use_id: null });
+      yield assistant("m2", [{ type: "redacted_thinking", data: "hidden" }, { type: "text", text: "  " }, { type: "text", text: "Done: it snows now." }]);
+      yield success();
+    });
+
+    const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(events.filter((e) => e.type === "message")).toEqual([
+      { type: "message", text: "I'll add some snow." },
+      { type: "message", text: "Done: it snows now." },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/secret reasoning|hidden|tool input|tool output/);
+  });
+
   it("counts cached input as input, and reconciles with Claude's final totals", async () => {
     const worktree = await tempWorktree();
     const { query } = fakeQuery(async function* () {

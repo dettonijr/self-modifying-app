@@ -29,6 +29,8 @@ export interface TokenUsage {
 export type AgentEvent =
   /** Something worth showing a Player, e.g. a file being edited. */
   | { type: "progress"; message: string; file?: string }
+  /** A piece of Claude's own text reply, for the Run's log. Never tool calls, tool results or hidden reasoning. */
+  | { type: "message"; text: string }
   /** Tokens consumed since the previous usage event (incremental). */
   | { type: "usage"; usage: TokenUsage }
   /** The final event. */

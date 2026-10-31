@@ -61,7 +61,7 @@ export class ClaudeAgent implements Agent {
       const options = await this.sdkOptions(task, abort);
       for await (const message of this.query({ prompt: promptFor(task), options })) {
         if (message.type === "assistant") {
-          for (const event of progressOf(message.message.content as unknown[], task.worktree)) yield event;
+          for (const event of eventsOf(message.message.content as unknown[], task.worktree)) yield event;
           const delta = usage.seeMessage(message.message.id, message.message.usage as unknown as Record<string, number | undefined>);
           if (delta) yield { type: "usage", usage: delta };
           if (usage.total() > this.options.tokenLimit) stop(`The Run went over its limit of ${this.options.tokenLimit} tokens`);
@@ -136,11 +136,16 @@ function promptFor(task: AgentTask): string {
   return `A Player sent this Prompt:\n\n${task.instructions}`;
 }
 
-/** Turns file-editing tool calls into progress events with worktree-relative paths. */
-function progressOf(content: unknown[], worktree: string): AgentEvent[] {
+/**
+ * Turns Claude's text replies into message events, and file-editing tool calls
+ * into progress events with worktree-relative paths. Hidden reasoning and other
+ * tool calls are left out.
+ */
+function eventsOf(content: unknown[], worktree: string): AgentEvent[] {
   const events: AgentEvent[] = [];
   for (const block of content) {
-    const { type, name, input } = block as { type?: string; name?: string; input?: { file_path?: unknown } };
+    const { type, name, input, text } = block as { type?: string; name?: string; input?: { file_path?: unknown }; text?: unknown };
+    if (type === "text" && typeof text === "string" && text.trim() !== "") events.push({ type: "message", text });
     if (type !== "tool_use" || (name !== "Write" && name !== "Edit") || typeof input?.file_path !== "string") continue;
     const file = path.relative(worktree, input.file_path);
     events.push({ type: "progress", message: `Editing ${file}`, file });

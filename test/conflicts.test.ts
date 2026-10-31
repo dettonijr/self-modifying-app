@@ -83,6 +83,8 @@ describe("Conflict handling", () => {
     expect(resolution.instructions).toContain("index.html");
     expect(conflicted).toMatch(/<<<<<<<[\s\S]*Rain[\s\S]*Snow|<<<<<<<[\s\S]*Snow[\s\S]*Rain/);
 
+    const { log } = (await (await platform.consoleApi(`/api/runs/${alice.id}`)).json()) as { log: Array<{ text: string }> };
+    expect(log.map((entry) => entry.text)).toContain("Fixing a conflict (attempt 1 of 2)");
     expect(git(platform, ["rev-parse", "main"])).toBe(finished.commit);
     expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(bob.commit);
     expect(await (await platform.fetchCanvas("/")).text()).toContain("Snow and Rain");
