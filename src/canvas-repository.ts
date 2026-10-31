@@ -73,6 +73,20 @@ export class CanvasRepository {
     await git(this.dir, ["branch", "--quiet", "-D", worktree.branch]).catch(() => undefined);
   }
 
+  /** Removes every worktree and every branch whose name starts with `branchPrefix`, even ones that are partly gone. */
+  async removeWorktreesAndBranches(branchPrefix: string): Promise<void> {
+    await git(this.dir, ["worktree", "prune"]);
+    const worktrees = (await git(this.dir, ["worktree", "list", "--porcelain"]))
+      .split("\n")
+      .filter((line) => line.startsWith("worktree "))
+      .map((line) => line.slice("worktree ".length))
+      .filter((dir) => path.resolve(dir) !== path.resolve(this.dir));
+    for (const dir of worktrees) await git(this.dir, ["worktree", "remove", "--force", dir]).catch(() => undefined);
+    await git(this.dir, ["worktree", "prune"]);
+    const branches = await git(this.dir, ["for-each-ref", "--format=%(refname:short)", `refs/heads/${branchPrefix}`]);
+    for (const branch of branches.split("\n").filter(Boolean)) await git(this.dir, ["branch", "--quiet", "-D", branch]);
+  }
+
   /**
    * Commits everything in a worktree with the change's metadata, and returns
    * the new commit, or `undefined` if nothing changed.
