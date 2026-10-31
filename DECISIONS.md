@@ -149,6 +149,14 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **`readNumber` and `writeJsonAtomically` live in `src/data-files.ts`**, for the host-command files.
 - **`RESOLUTION_MODEL` is `DEFAULT_MODEL`.**
 
+## Look and feel
+
+- **The platform pages use the Tokyo Night (Night) palette, dark only for now** (user, 2026-10-31). The Console, Run page and Canvas banner/notice take every colour from one palette file of named variables, so the palette can be swapped by editing that file; a light theme (Tokyo Night Day) would just be a second set of values.
+- **The starter Canvas has its own copy of the Tokyo Night colours in its theme variables and doesn't import the platform palette** (user, 2026-10-31). The Canvas belongs to the Players, and Prompts may change its look.
+- **Buttons must be easy to read**: large text, WCAG AA contrast, obvious disabled state (user, 2026-10-31).
+- **Every page must work on phones** (from 360px wide, 44×44px tap targets, no hover-only interactions) (user, 2026-10-31).
+- **Every Canvas change Players ask for must be playable on phones** (user, 2026-10-31). Claude is told so in the Canvas `CLAUDE.md` and platform rules, and the render check also loads candidates at phone size, rejecting only blank pages or crashes, not awkward layouts, so accidents stay part of the game.
+
 ## Security
 
 - **Every Console API endpoint refuses calls from other origins using `isCrossOrigin()`** (ticket 01). Reuse it on every new endpoint, including the Canvas platform services in ticket 11.
