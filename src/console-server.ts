@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
+import { WebSocketServer, type WebSocket } from "ws";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { isCrossOrigin } from "./http.ts";
@@ -7,12 +9,15 @@ import { PromptRefused, type Runs } from "./runs.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
 const MAX_BODY_BYTES = 16 * 1024;
-const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, busy: 409, paused: 503 };
+const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503 };
 
-/** Serves the Console UI and the Console API. */
+/**
+ * Serves the Console UI and the Console API, including `/api/live`: a
+ * WebSocket that sends a `snapshot` on connecting, then every `RunsEvent`.
+ */
 export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository; budget: Budget }): Server {
   const { runs, repo, budget } = options;
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://console");
       if (url.pathname === "/" && req.method === "GET") {
@@ -55,6 +60,32 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       res.end("Internal error");
     }
   });
+
+  const live = new WebSocketServer({ noServer: true, maxPayload: 1024 });
+  server.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+    const { pathname } = new URL(req.url ?? "/", "http://console");
+    if (pathname !== "/api/live") return refuseUpgrade(socket, "404 Not Found");
+    if (isCrossOrigin(req)) return refuseUpgrade(socket, "403 Forbidden");
+    live.handleUpgrade(req, socket, head, (client) => followRuns(client, runs));
+  });
+  // Upgraded sockets aren't the HTTP server's connections any more, so closing the server wouldn't close them.
+  const closeServer = server.close.bind(server);
+  server.close = (callback) => {
+    for (const client of live.clients) client.terminate();
+    return closeServer(callback);
+  };
+  return server;
+}
+
+function followRuns(client: WebSocket, runs: Runs): void {
+  client.send(JSON.stringify({ type: "snapshot", ...runs.snapshot() }));
+  const unsubscribe = runs.subscribe((event) => client.send(JSON.stringify(event)));
+  client.on("close", unsubscribe);
+  client.on("error", () => client.terminate());
+}
+
+function refuseUpgrade(socket: Duplex, status: string): void {
+  socket.end(`HTTP/1.1 ${status}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {

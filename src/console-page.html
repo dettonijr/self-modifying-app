@@ -11,9 +11,15 @@
     .row { display: flex; gap: 0.5rem; align-items: center; }
     .counter { margin-left: auto; color: #666; font-variant-numeric: tabular-nums; }
     .error { color: #b00020; }
-    #history { list-style: none; padding: 0; }
-    #history li { border-top: 1px solid #ddd; padding: 0.5rem 0; }
+    #history, #queue, #runs { list-style: none; padding: 0; }
+    #history li, #queue li, #runs li { border-top: 1px solid #ddd; padding: 0.5rem 0; }
     #history time { color: #666; font-size: 0.85em; }
+    .state { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.1em 0.4em; border-radius: 0.3em; background: #eee; }
+    .state.landed { background: #d7f5dd; }
+    .state.rejected { background: #fbe0e3; }
+    #runs .progress li { border: 0; padding: 0; }
+    .progress { color: #555; font-size: 0.9em; margin: 0.25rem 0 0; padding-left: 1rem; }
+    .empty { color: #666; }
     .spending { color: #666; font-variant-numeric: tabular-nums; }
     .paused { background: #fff4e5; border: 1px solid #f0b54a; padding: 0.75rem 1rem; border-radius: 0.25rem; }
     [hidden] { display: none !important; }
@@ -53,6 +59,13 @@
       <p id="status" role="status"></p>
     </form>
   </section>
+
+  <h2>Queue</h2>
+  <ol id="queue" data-testid="queue"></ol>
+  <p id="queue-empty" class="empty">Nothing waiting.</p>
+
+  <h2>Runs</h2>
+  <ol id="runs" data-testid="runs"></ol>
 
   <h2>History</h2>
   <ol id="history" data-testid="history"></ol>
@@ -108,19 +121,90 @@
       if (!response.ok) return setStatus(body.error ?? "The Prompt was refused", true);
       $("prompt").value = "";
       updateCounter();
-      setStatus("Claude is working on it…");
-      void followRun(body.id);
+      myRuns.add(body.id);
+      setStatus(body.state === "waiting" ? "Your Prompt is in the queue…" : "Claude is working on it…");
     });
 
-    async function followRun(id) {
-      while (true) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        const response = await fetch(`/api/runs/${encodeURIComponent(id)}`);
-        if (!response.ok) return;
-        const run = await response.json();
-        if (run.state === "landed") return setStatus("Your change Landed!"), refreshHistory(), refreshSpending();
-        if (run.state === "rejected") return setStatus(`Your Prompt didn't Land: ${run.error}`, true), refreshSpending();
+    // Live updates: a snapshot on connecting, then queue, Run and progress events.
+    const MAX_RUNS_SHOWN = 20;
+    const MAX_PROGRESS_SHOWN = 5;
+    const myRuns = new Set();
+    let queue = [];
+    let runs = new Map();
+
+    function connectLive() {
+      const socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/live`);
+      socket.addEventListener("message", (event) => handleLive(JSON.parse(event.data)));
+      socket.addEventListener("close", () => setTimeout(connectLive, 1000));
+    }
+
+    function handleLive(message) {
+      if (message.type === "snapshot") {
+        queue = message.queue;
+        runs = new Map(message.runs.map((run) => [run.id, run]));
+        void refreshHistory();
+      } else if (message.type === "queue") {
+        queue = message.queue;
+      } else if (message.type === "run") {
+        if (message.run.state !== "waiting") runs.set(message.run.id, message.run);
+        if (myRuns.has(message.run.id)) showMyRun(message.run);
+        if (message.run.state === "landed") void refreshHistory();
+        if (message.run.state === "landed" || message.run.state === "rejected") void refreshSpending();
+      } else if (message.type === "progress") {
+        const run = runs.get(message.runId);
+        if (run) run.progress.push({ message: message.message, file: message.file });
       }
+      render();
+    }
+
+    function showMyRun(run) {
+      if (run.state === "running") setStatus("Claude is working on it…");
+      if (run.state === "landed") setStatus("Your change Landed!");
+      if (run.state === "rejected") setStatus(`Your Prompt didn't Land: ${run.error}`, true);
+    }
+
+    function describe(run) {
+      const item = document.createElement("li");
+      const who = document.createElement("strong");
+      who.textContent = run.nickname;
+      const prompt = document.createElement("q");
+      prompt.textContent = run.prompt;
+      item.append(who, ": ", prompt);
+      return item;
+    }
+
+    function render() {
+      $("queue").replaceChildren(...queue.map(describe));
+      $("queue-empty").hidden = queue.length > 0;
+      const shown = [...runs.values()].reverse().slice(0, MAX_RUNS_SHOWN);
+      $("runs").replaceChildren(
+        ...shown.map((run) => {
+          const item = describe(run);
+          item.dataset.state = run.state;
+          const state = document.createElement("span");
+          state.className = `state ${run.state}`;
+          state.textContent = run.state;
+          item.prepend(state, " ");
+          if (run.state === "rejected") {
+            const reason = document.createElement("p");
+            reason.className = "error";
+            reason.textContent = run.error;
+            item.append(reason);
+          } else if (run.state === "running" || run.state === "landing") {
+            const progress = document.createElement("ul");
+            progress.className = "progress";
+            progress.append(
+              ...run.progress.slice(-MAX_PROGRESS_SHOWN).map((step) => {
+                const line = document.createElement("li");
+                line.textContent = step.message;
+                return line;
+              }),
+            );
+            item.append(progress);
+          }
+          return item;
+        }),
+      );
     }
 
     async function refreshHistory() {
@@ -157,9 +241,9 @@
 
     showPlayer();
     updateCounter();
-    void refreshHistory();
+    render();
+    connectLive();
     void refreshSpending();
-    setInterval(refreshHistory, 5000);
     setInterval(refreshSpending, 2000);
   </script>
 </body>
