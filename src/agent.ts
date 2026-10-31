@@ -32,6 +32,22 @@ export interface TokenUsage {
   cacheWriteTokens?: number;
 }
 
+/** All four token counts, none optional. */
+export type UsageCounts = Required<TokenUsage>;
+
+export const USAGE_KINDS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const satisfies ReadonlyArray<keyof UsageCounts>;
+
+export const zeroUsage = (): UsageCounts => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+
+/** Adds `usage` into `sum` (absent cache counts are 0) and returns `sum`. */
+export function addUsage<T extends UsageCounts>(sum: T, usage: TokenUsage): T {
+  sum.inputTokens += usage.inputTokens;
+  sum.outputTokens += usage.outputTokens;
+  sum.cacheReadTokens += usage.cacheReadTokens ?? 0;
+  sum.cacheWriteTokens += usage.cacheWriteTokens ?? 0;
+  return sum;
+}
+
 export type AgentEvent =
   /** Something worth showing a Player, e.g. a file being edited. */
   | { type: "progress"; message: string; file?: string }

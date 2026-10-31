@@ -22,6 +22,12 @@ describe("Console server", () => {
     expect(await response.json()).toEqual({ ok: true });
   });
 
+  it("has no history endpoint: the Prompts list is /api/runs", async () => {
+    platform = await startTestPlatform();
+    expect((await platform.consoleApi("/api/history")).status).toBe(404);
+    expect((await platform.consoleApi("/api/runs")).status).toBe(200);
+  });
+
   it("refuses API calls made from the Canvas origin", async () => {
     platform = await startTestPlatform();
     const response = await platform.consoleApi("/api/health", {

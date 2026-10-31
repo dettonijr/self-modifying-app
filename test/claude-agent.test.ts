@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Options, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -92,6 +92,10 @@ describe("The Claude Agent", () => {
     for (const rule of ["phone", "sideways", "pointer events", "hover", "44", '<meta name="viewport"']) {
       expect(append).toContain(rule);
     }
+    // Word for word the same as the starter Canvas's "Every change works on phones".
+    const conventions = await readFile(new URL("../starter-canvas/CLAUDE.md", import.meta.url), "utf8");
+    const section = conventions.split("## Every change works on phones\n")[1].split("\n## ")[0].trim();
+    expect(append).toContain(section);
   });
 
   it("offers only file tools: no shell, no network, no subagents, and no settings, hooks or MCP from disk", async () => {

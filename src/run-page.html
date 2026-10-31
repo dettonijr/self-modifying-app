@@ -102,7 +102,7 @@
   </main>
 
   <script type="module">
-    import { actionsFor, connectLive, isFinished, modelName, runUrl, span, usageSpan } from "/console-shared.js";
+    import { actionsFor, changeLabel, connectLive, detailsOf, runUrl, setStatus, span } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     // The id from the URL: a Run id, or the commit of a Landed change.
@@ -162,13 +162,13 @@
     const filesSection = {
       element: $("files").querySelector(".body"),
       render(run) {
-        this.element.replaceChildren(changedFilesList(run.files ?? [], { finished: isFinished(run) }));
+        this.element.replaceChildren(changedFilesList(run.files ?? [], { finished: run.finished }));
         void showCanvasVersion(run.state === "landed" ? run.commit : undefined);
       },
       live(message) {
         if (message.type === "files") this.element.replaceChildren(changedFilesList(message.files.map((path) => ({ path })), { finished: false }));
         // Finished: fetch the final change, which only the Run's endpoint serves.
-        if (message.type === "run" && isFinished(message.run)) void refreshFiles();
+        if (message.type === "run" && message.run.finished) void refreshFiles();
       },
     };
 
@@ -229,10 +229,7 @@
 
     const sections = [logSection, filesSection];
 
-    function setStatus(message, isError = false) {
-      $("status").replaceChildren(...(Array.isArray(message) ? message : [message]));
-      $("status").className = isError ? "error" : "";
-    }
+    const status = (message, isError) => setStatus($("status"), message, isError);
 
     // Live messages that arrive while the Run is being fetched; handled once it has been, so none is missed.
     let pending;
@@ -247,7 +244,7 @@
           $("run").hidden = true;
           return;
         }
-        if (!response.ok) return setStatus("Couldn't load this Run; retrying…", true);
+        if (!response.ok) return status("Couldn't load this Run; retrying…", true);
         run = await response.json();
         renderDetails();
         for (const section of sections) section.render(run);
@@ -269,31 +266,21 @@
       if (run.original) {
         const link = document.createElement("a");
         link.href = runUrl(run.original.commit);
-        const [mark, kind] = run.kind === "Rollback" ? ["↩ ", "Rollback"] : ["↻ ", "Replay"];
-        link.append(`${kind} of `, span("nickname original-nickname", run.original.nickname), `'s '${run.prompt}'`);
+        const { mark, name } = changeLabel(run);
+        link.append(`${name} of `, span("nickname original-nickname", run.original.nickname), `'s '${run.prompt}'`);
         $("original").replaceChildren(mark, link);
       }
       $("prompt").textContent = run.prompt;
-      const details = [span("model", modelName(run.model))];
-      if (run.time) {
-        const time = document.createElement("time");
-        time.dateTime = run.time;
-        time.textContent = new Date(run.time).toLocaleString();
-        details.push(" · ", time);
-      }
-      details.push(" · ", usageSpan(run));
-      if (run.state === "landed") details.push(" · ", span("outcome landed", "Landed"));
-      if (run.state === "rejected") details.push(" · ", span("outcome error", run.error ?? "Rejected"));
-      $("details").replaceChildren(...details);
+      $("details").replaceChildren(...detailsOf(run));
       $("actions").replaceChildren(...(run.state === "landed" && run.commit ? [actionsFor(run, { defaultModel: () => run.model, onQueued })] : []));
     }
 
     function onQueued({ ok, what, run: queued, error, started }) {
-      if (!ok) return setStatus(error, true);
+      if (!ok) return status(error, true);
       const link = document.createElement("a");
       link.href = runUrl(queued.id);
       link.textContent = `Follow your ${what}`;
-      setStatus([queued.state === "waiting" ? `Your ${what} is in the queue… ` : `${started} `, link]);
+      status([queued.state === "waiting" ? `Your ${what} is in the queue… ` : `${started} `, link]);
     }
 
     function handleLive(message) {

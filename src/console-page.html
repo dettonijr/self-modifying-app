@@ -81,7 +81,7 @@
   </main>
 
   <script type="module">
-    import { actionsFor, connectLive, fillModels, isFinished, modelName, runUrl, span, usageSpan } from "/console-shared.js";
+    import { actionsFor, changeLabel, connectLive, detailsOf, fillModels, queueChange, runUrl, setStatus, span } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     fillModels($("model"));
@@ -118,24 +118,16 @@
     const updateCounter = () => ($("prompt-counter").textContent = `${$("prompt").value.length} / ${MAX_PROMPT}`);
     $("prompt").addEventListener("input", updateCounter);
 
-    function setStatus(message, isError = false) {
-      $("status").textContent = message;
-      $("status").className = isError ? "error" : "";
-    }
+    const status = (message, isError) => setStatus($("status"), message, isError);
 
     $("prompt-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const response = await fetch("/api/prompts", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: $("prompt").value, model: $("model").value }),
-      });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok) return setStatus(body.error ?? "The Prompt was refused", true);
-      $("prompt").value = "";
-      updateCounter();
-      myRuns.add(body.id);
-      setStatus(body.state === "waiting" ? "Your Prompt is in the queue…" : "Claude is working on it…");
+      const queued = await queueChange("/api/prompts", { prompt: $("prompt").value, model: $("model").value }, "Prompt", "Claude is working on it…");
+      if (queued.ok) {
+        $("prompt").value = "";
+        updateCounter();
+      }
+      onQueued(queued);
     });
 
     // Live updates: a snapshot with every Run's summary on connecting, then each Run's summary whenever it changes.
@@ -162,11 +154,11 @@
     }
 
     function showMyRun(run) {
-      if (run.state === "running") setStatus("Claude is working on it…");
-      if (run.state === "resolving") setStatus("Your change couldn't Land as it was; Claude is fixing it…");
-      if (run.state === "restarted") setStatus("Your change couldn't be reconciled; Claude is starting over on the latest Canvas…");
-      if (run.state === "landed") setStatus("Your change Landed!");
-      if (run.state === "rejected") setStatus(`Your Prompt didn't Land: ${run.error}`, true);
+      if (run.state === "running") status("Claude is working on it…");
+      if (run.state === "resolving") status("Your change couldn't Land as it was; Claude is fixing it…");
+      if (run.state === "restarted") status("Your change couldn't be reconciled; Claude is starting over on the latest Canvas…");
+      if (run.state === "landed") status("Your change Landed!");
+      if (run.state === "rejected") status(`Your Prompt didn't Land: ${run.error}`, true);
     }
 
     const shorten = (text) => (text.length > MAX_PROMPT_SHOWN ? text.slice(0, MAX_PROMPT_SHOWN - 1).trimEnd() + "…" : text);
@@ -193,24 +185,14 @@
         reference.className = "original";
         reference.textContent = run.original.commit.slice(0, 7);
         reference.title = `${run.kind} of ${run.original.commit}`;
-        const finished = isFinished(run);
-        const [mark, verb] = run.kind === "Replay" ? ["↻ ", finished ? " replayed " : " replays "] : ["↩ ", finished ? " rolled back " : " rolls back "];
-        item.append(mark, who, verb, span("nickname original-nickname", run.original.nickname), "'s ", link, " ", reference);
+        const { mark, verb } = changeLabel(run);
+        item.append(mark, who, ` ${verb} `, span("nickname original-nickname", run.original.nickname), "'s ", link, " ", reference);
       } else {
         item.append(who, ": ", link);
       }
       const details = document.createElement("div");
       details.className = "details";
-      details.append(span("model", modelName(run.model)));
-      if (run.time) {
-        const time = document.createElement("time");
-        time.dateTime = run.time;
-        time.textContent = new Date(run.time).toLocaleString();
-        details.append(" · ", time);
-      }
-      details.append(" · ", usageSpan(run));
-      if (run.state === "landed") details.append(" · ", span("outcome landed", "Landed"));
-      if (run.state === "rejected") details.append(" · ", span("outcome error", run.error ?? "Rejected"));
+      details.append(...detailsOf(run));
       item.append(details);
       // The whole entry opens the Run's page, except its buttons and confirmations.
       item.addEventListener("click", (event) => {
@@ -222,9 +204,9 @@
     }
 
     function onQueued({ ok, what, run, error, started }) {
-      if (!ok) return setStatus(error, true);
+      if (!ok) return status(error, true);
       myRuns.add(run.id);
-      setStatus(run.state === "waiting" ? `Your ${what} is in the queue…` : started);
+      status(run.state === "waiting" ? `Your ${what} is in the queue…` : started);
     }
 
     showPlayer();

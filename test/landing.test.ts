@@ -85,7 +85,7 @@ describe("A Prompt Lands", () => {
     expect(accepted.status).toBe(202);
   });
 
-  it("lists Landed changes in the history, newest first, with nickname, Prompt and time", async () => {
+  it("lists every Run, newest first, with nickname, Prompt and time, and records each Landed change's kind as a trailer", async () => {
     const { platform, agent } = await start();
     agent.enqueue(
       (run) => run.writeFile("index.html", "snow"),
@@ -99,14 +99,17 @@ describe("A Prompt Lands", () => {
       await platform.waitForRun((await platform.sendPrompt({ nickname, prompt })).id);
     }
 
-    const history = await (await platform.consoleApi("/api/history")).json();
-    expect(history).toMatchObject([
-      { kind: "Prompt", nickname: "Carol", prompt: "make it rain\n\nKind: Rollback", model: "claude-sonnet-5-5" },
-      { kind: "Prompt", nickname: "Alice", prompt: "make it snow", model: "claude-sonnet-5-5" },
+    const runs = await platform.listRuns();
+    expect(runs).toMatchObject([
+      { state: "landed", nickname: "Carol", prompt: "make it rain\n\nKind: Rollback", model: "claude-sonnet-5-5" },
+      { state: "rejected", nickname: "Bob", prompt: "fails" },
+      { state: "landed", nickname: "Alice", prompt: "make it snow", model: "claude-sonnet-5-5" },
     ]);
-    for (const change of history) {
-      expect(Date.parse(change.time)).toBeGreaterThanOrEqual(Math.floor(startedAt / 1000) * 1000);
+    for (const run of runs) {
+      expect(Date.parse(run.time!)).toBeGreaterThanOrEqual(startedAt);
     }
+    // A Prompt can't forge its commit's trailers.
+    expect(git(platform.canvasRepoDir, ["log", "-1", "--format=%(trailers:key=Kind,valueonly)", runs[0].commit!])).toBe("Prompt");
   });
 });
 

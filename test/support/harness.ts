@@ -29,6 +29,8 @@ export interface TestPlatform {
   sendPrompt(prompt: { nickname: string; prompt: string; model?: string }): Promise<RunView>;
   /** Replays a change from the history as a Player would; returns the raw response. */
   replay(replay: { nickname: string; commit: string; model?: string }): Promise<Response>;
+  /** The Prompts list from `GET /api/runs`: every Run, newest first. */
+  listRuns(): Promise<RunSummary[]>;
   /** Connects to the Console's live updates as a Console page would. Closed with the platform. */
   live(): Promise<LiveConsole>;
   /** Polls a Run until it has Landed or been rejected. */
@@ -56,6 +58,14 @@ export interface RunView {
   model: string;
   error?: string;
   commit?: string;
+}
+
+/** A Prompts list entry from `GET /api/runs`. */
+export interface RunSummary extends RunView {
+  kind?: string;
+  original?: { commit: string; nickname: string };
+  time?: string;
+  finished: boolean;
 }
 
 /**
@@ -96,6 +106,9 @@ export async function startTestPlatform(options: TestPlatformOptions = {}): Prom
         headers: { "content-type": "application/json", cookie: `nickname=${encodeURIComponent(nickname)}` },
         body: JSON.stringify(body),
       });
+    },
+    async listRuns() {
+      return (await (await consoleApi("/api/runs")).json()) as RunSummary[];
     },
     async live() {
       const live = await connectLive(consoleUrl.replace(/^http/, "ws") + "/api/live");

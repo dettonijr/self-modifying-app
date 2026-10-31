@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { existsSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { runHostCommand } from "../src/host-commands.ts";
 import { FakeAgent, Gate } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform, type TestPlatformOptions } from "./support/harness.ts";
@@ -65,6 +69,16 @@ describe("No spending cap", () => {
     queued.release();
     expect(await platform.waitForRun(heavy.id)).toMatchObject({ state: "landed" });
     expect(await platform.waitForRun(waiting.id)).toMatchObject({ state: "landed" });
+  });
+
+  it("deletes the old spending cap's files from the data folder on startup", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "sma-test-"));
+    onTestFinished(() => rm(dataDir, { recursive: true, force: true }));
+    await writeFile(path.join(dataDir, "spending.json"), JSON.stringify({ spentUsd: 3 }));
+    await writeFile(path.join(dataDir, "spending-cap.json"), JSON.stringify({ capUsd: 20 }));
+    await start({ dataDir });
+    expect(existsSync(path.join(dataDir, "spending.json"))).toBe(false);
+    expect(existsSync(path.join(dataDir, "spending-cap.json"))).toBe(false);
   });
 
   it("has no spending endpoint and no raise-cap command", async () => {

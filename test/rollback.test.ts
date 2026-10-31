@@ -43,8 +43,8 @@ describe("Rollback", () => {
     expect(git(platform, ["rev-parse", "main"])).toBe(finished.commit);
     expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(rain.commit);
 
-    const history = (await (await platform.consoleApi("/api/history")).json()) as unknown[];
-    expect(history[0]).toMatchObject({ commit: finished.commit, kind: "Rollback", nickname: "Carol", prompt: "make it snow", original: { commit: snow.commit, nickname: "Alice" } });
+    const [latest] = await platform.listRuns();
+    expect(latest).toMatchObject({ commit: finished.commit, kind: "Rollback", nickname: "Carol", prompt: "make it snow", original: { commit: snow.commit, nickname: "Alice" } });
     const trailers = git(platform, ["log", "-1", "--format=%(trailers)", finished.commit!]);
     expect(trailers).toContain("Kind: Rollback");
     expect(trailers).toContain("Nickname: Carol");
@@ -75,7 +75,7 @@ describe("Rollback", () => {
     // The Agent starts from the latest Canvas, with no conflict markers.
     expect(page).toBe("<h1>Rain</h1><p>Rain falls</p>");
     expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(rain.commit);
-    expect(await (await platform.consoleApi("/api/history")).json()).toMatchObject([{ kind: "Rollback", nickname: "Carol", original: { commit: snow.commit, nickname: "Alice" } }, {}, {}]);
+    expect((await platform.listRuns()).filter((run) => run.state === "landed")).toMatchObject([{ kind: "Rollback", nickname: "Carol", original: { commit: snow.commit, nickname: "Alice" } }, {}, {}]);
     expect(git(platform, ["branch", "--list"])).toBe("* main");
   });
 
@@ -134,11 +134,11 @@ describe("Rollback", () => {
     const redone = await platform.waitForRun(((await (await rollback(platform, "Dave", undone.commit!)).json()) as RunView).id);
     expect(redone).toMatchObject({ state: "landed" });
     expect(await (await platform.fetchCanvas("/features/snow/snow.js")).text()).toBe("snow");
-    expect(await (await platform.consoleApi("/api/history")).json()).toMatchObject([
-      { kind: "Rollback", nickname: "Dave", original: { commit: undone.commit, nickname: "Carol" }, prompt: "make it snow" },
-      { kind: "Rollback", nickname: "Carol", original: { commit: snow.commit, nickname: "Alice" } },
-      { kind: "Prompt", nickname: "Alice" },
-    ]);
+    const [dave, carol, alice] = await platform.listRuns();
+    expect(dave).toMatchObject({ kind: "Rollback", nickname: "Dave", original: { commit: undone.commit, nickname: "Carol" }, prompt: "make it snow" });
+    expect(carol).toMatchObject({ kind: "Rollback", nickname: "Carol", original: { commit: snow.commit, nickname: "Alice" } });
+    expect(alice).toMatchObject({ nickname: "Alice", state: "landed" });
+    expect(alice.kind).toBeUndefined();
   });
 });
 

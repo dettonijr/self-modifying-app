@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import type { Agent } from "./agent.ts";
 import { CanvasChannel } from "./canvas-channel.ts";
@@ -11,6 +12,9 @@ import { RenderCheck } from "./render-check.ts";
 import { RunStore } from "./run-store.ts";
 import { currentMaxParallelRuns, DEFAULT_MAX_PARALLEL_RUNS } from "./parallel-limit.ts";
 import { Runs } from "./runs.ts";
+
+/** Data files nothing reads any more: the removed spending cap's. Deleted on startup. */
+const OBSOLETE_DATA_FILES = ["spending.json", "spending-cap.json"];
 
 export interface PlatformOptions {
   /** Holds the Canvas repo and the platform services' SQLite database. Created if missing. */
@@ -41,6 +45,7 @@ export interface Platform {
 export async function startPlatform(options: PlatformOptions): Promise<Platform> {
   const host = options.host ?? "0.0.0.0";
   const repo = await CanvasRepository.open(path.join(options.dataDir, "canvas"));
+  for (const file of OBSOLETE_DATA_FILES) await rm(path.join(options.dataDir, file), { force: true });
 
   const renderCheck = new RenderCheck(repo);
   const runStore = new RunStore(path.join(options.dataDir, "runs.sqlite"));

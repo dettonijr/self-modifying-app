@@ -83,9 +83,6 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
         // The Canvas is on the same host as the Console, on its own port (docs/adr/0004).
         return sendJson(res, 200, { port: canvasPort() });
       }
-      if (url.pathname === "/api/history" && req.method === "GET") {
-        return sendJson(res, 200, await repo.history());
-      }
       res.writeHead(404).end("Not found");
     } catch (error) {
       console.error("Console server error", error);

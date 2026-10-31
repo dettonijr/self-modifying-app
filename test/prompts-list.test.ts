@@ -39,9 +39,9 @@ describe("The Prompts list (every Run, newest first)", () => {
     const live = await platform.live();
     const snapshot = await live.waitFor((m) => m.type === "snapshot");
     const expected = [
-      { id: waiting.id, state: "waiting", nickname: "Bob", prompt: "make it rain", model: "claude-sonnet-5-5" },
-      { id: running.id, state: "running", nickname: "Alice", prompt: "make it snow", model: "claude-opus-5-5" },
-      { id: rejected.id, state: "rejected", nickname: "Alice", prompt: "break it", error: "Claude gave up" },
+      { id: waiting.id, state: "waiting", finished: false, nickname: "Bob", prompt: "make it rain", model: "claude-sonnet-5-5" },
+      { id: running.id, state: "running", finished: false, nickname: "Alice", prompt: "make it snow", model: "claude-opus-5-5" },
+      { id: rejected.id, state: "rejected", finished: true, nickname: "Alice", prompt: "break it", error: "Claude gave up" },
     ];
     expect(snapshot.runs).toMatchObject(expected);
     expect(await listed(platform)).toMatchObject(expected);
@@ -53,8 +53,8 @@ describe("The Prompts list (every Run, newest first)", () => {
 
     gate.release();
     await platform.waitForRun(waiting.id);
-    const states = live.messages.filter((m) => m.type === "run" && m.run.id === running.id).map((m) => m.run.state);
-    expect(states).toEqual(["landing", "landed"]);
+    const states = live.messages.filter((m) => m.type === "run" && m.run.id === running.id).map((m) => [m.run.state, m.run.finished]);
+    expect(states).toEqual([["landing", false], ["landed", true]]);
     expect((await listed(platform)).map((run) => [run.id, run.state])).toEqual([
       [waiting.id, "rejected"],
       [running.id, "landed"],

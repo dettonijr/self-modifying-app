@@ -11,8 +11,6 @@ export const modelName = (model) => MODELS.find((option) => option.value === mod
 /** Where a Run's page lives. `id` may be a Run id or the commit of a Landed change. */
 export const runUrl = (id) => `/runs/${encodeURIComponent(id)}`;
 
-export const isFinished = (run) => run.state === "landed" || run.state === "rejected";
-
 /** A token count rounded with k or M to at most one decimal: "850", "1.2k", "48k", "1.1M". */
 export function tokenCount(count) {
   const rounded = (value, suffix) => `${Number(value.toFixed(1))}${suffix}`;
@@ -38,6 +36,41 @@ export function usageSpan(run) {
   const element = span("usage", usageLine(run.usage));
   if (!run.usage) element.title = "No usage was recorded for this Run";
   return element;
+}
+
+/**
+ * A Run's details: model, time, tokens and cost, and its outcome once
+ * finished, as nodes to put in its `.details` element.
+ */
+export function detailsOf(run) {
+  const details = [span("model", modelName(run.model))];
+  if (run.time) {
+    const time = document.createElement("time");
+    time.dateTime = run.time;
+    time.textContent = new Date(run.time).toLocaleString();
+    details.push(" · ", time);
+  }
+  details.push(" · ", usageSpan(run));
+  if (run.state === "landed") details.push(" · ", span("outcome landed", "Landed"));
+  if (run.state === "rejected") details.push(" · ", span("outcome error", run.error ?? "Rejected"));
+  return details;
+}
+
+/**
+ * How a Replay or Rollback Run is labelled: its mark, its kind's name, and
+ * what its Player did or is doing to the original ("replayed", "rolls back").
+ * `run.finished` comes from the Console API.
+ */
+export function changeLabel(run) {
+  return run.kind === "Rollback"
+    ? { mark: "↩ ", name: "Rollback", verb: run.finished ? "rolled back" : "rolls back" }
+    : { mark: "↻ ", name: "Replay", verb: run.finished ? "replayed" : "replays" };
+}
+
+/** Shows `message` (text, or an array of text and nodes) in a status line, as an error if `isError`. */
+export function setStatus(element, message, isError = false) {
+  element.replaceChildren(...(Array.isArray(message) ? message : [message]));
+  element.className = isError ? "error" : "";
 }
 
 /** Fills a `<select>` with the models, picking the default. */
@@ -137,7 +170,12 @@ function showRollbackConfirmation(run, actions, onQueued) {
   actions.append(confirm);
 }
 
-async function queueChange(url, body, what, started) {
+/**
+ * POSTs a change (a Prompt, Replay or Rollback) to the Console API. Resolves
+ * with `{ ok, what, run, started }` once queued, or `{ ok: false, what, error }`
+ * if refused; `started` is the status to show if it's already running.
+ */
+export async function queueChange(url, body, what, started) {
   const response = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
   const answer = await response.json().catch(() => ({}));
   if (!response.ok) return { ok: false, what, error: answer.error ?? `The ${what} was refused` };

@@ -289,7 +289,7 @@ describe("Console UI", () => {
     await expect.poll(() => entry.getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
     expect(await entry.textContent()).toContain("↻ Alice replayed Bob's");
     expect(await entry.textContent()).toContain("make it snow");
-    const [replayed, snow] = await (await platform.consoleApi("/api/history")).json();
+    const [replayed, snow] = await platform.listRuns();
     expect(await entry.getAttribute("data-original")).toBe(snow.commit);
     expect(replayed.kind).toBe("Replay");
     expect(agent.tasks[1].model).toBe("claude-opus-5-5");

@@ -177,6 +177,25 @@ describe("Tokens and cost per Prompt", () => {
     expect(await listed(after.platform, snow.id)).not.toHaveProperty("usage");
     expect(await (await after.platform.consoleApi(`/api/runs/${snow.id}`)).json()).not.toHaveProperty("usage");
   });
+
+  it("doesn't start counting usage for a Run recorded before usage was that starts over after the upgrade", async () => {
+    const dataDir = await tempDataDir();
+    const before = await start({ dataDir });
+    before.agent.enqueue(interruptedByRestart);
+    const sent = await before.platform.sendPrompt({ nickname: "Alice", prompt: "make it snow" });
+    await before.agent.started(1);
+    await before.platform.close();
+    forgetUsage(dataDir, sent.id);
+
+    const after = await start({ dataDir });
+    after.agent.enqueue(async (run) => {
+      run.usage({ inputTokens: 500, outputTokens: 50 });
+      await run.writeFile("features/snow/snow.js", "snow");
+    });
+    expect(await after.platform.waitForRun(sent.id)).toMatchObject({ state: "landed" });
+    expect(await listed(after.platform, sent.id)).not.toHaveProperty("usage");
+    expect(await (await after.platform.consoleApi(`/api/runs/${sent.id}`)).json()).not.toHaveProperty("usage");
+  });
 });
 
 describe("The tokens and cost line", () => {

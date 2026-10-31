@@ -51,7 +51,7 @@ describe("Replay", () => {
     expect(task.instructions).toMatch(/reference/i);
     expect(task.instructions).toMatch(/unrelated/i);
 
-    const [latest] = await (await platform.consoleApi("/api/history")).json();
+    const [latest] = await platform.listRuns();
     expect(latest).toMatchObject({
       commit: finished.commit,
       kind: "Replay",

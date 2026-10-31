@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_MODEL, MODELS, type Agent, type Model, type TokenUsage } from "./agent.ts";
+import { addUsage, DEFAULT_MODEL, MODELS, zeroUsage, type Agent, type Model, type TokenUsage, type UsageCounts } from "./agent.ts";
 import type { CanvasRepository, ChangeKind, ChangeMetadata, LandedChange, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult, LandStep } from "./lander.ts";
 import { rulesFor } from "./change-kinds.ts";
@@ -60,12 +60,14 @@ export interface RunView {
   usageByModel?: UsageByModel;
   /** The totals of `usageByModel` and their estimated cost, worked out whenever the Run is read. Never saved. */
   usage?: RunUsage;
+  /** Whether the Run has finished (`isFinished` in `run-store.ts`), worked out whenever the Run is read, for pages that can't import it. Never saved. */
+  finished?: boolean;
 }
 
-export type UsageByModel = Partial<Record<Model, Required<TokenUsage>>>;
+export type UsageByModel = Partial<Record<Model, UsageCounts>>;
 
 /** A Run's tokens of each kind, over every model, and their estimated cost in US dollars, each model priced at its own rates. */
-export interface RunUsage extends Required<TokenUsage> {
+export interface RunUsage extends UsageCounts {
   cost: number;
 }
 
@@ -175,6 +177,8 @@ export class Runs {
    * Run record come first: they're from before Runs were saved.
    */
   private readonly runs = new Map<string, RunView>();
+  /** Landed Runs by their commit, for `get()`. Kept up to date by `remember()` and `landedAs()`. */
+  private readonly byCommit = new Map<string, RunView>();
   private readonly queue: RunView[] = [];
   /**
    * Runs that were in progress when the platform last stopped, oldest first.
@@ -273,21 +277,20 @@ export class Runs {
     const commits = new Set(saved.flatMap((run) => (run.commit ? [run.commit] : [])));
     for (const change of history) {
       if ((change.run !== undefined && ids.has(change.run)) || commits.has(change.commit)) continue;
-      const run = unrecordedRun(change);
-      this.runs.set(run.id, run);
+      this.remember(unrecordedRun(change));
     }
     // A Run can have Landed just before the platform stopped, without being saved as Landed.
     const landed = new Map(history.flatMap((change) => (change.run ? [[change.run, change] as const] : [])));
     for (const record of saved) {
       const run: RunView = { ...record, progress: [], log: record.log ?? [] };
-      this.runs.set(run.id, run);
+      this.remember(run);
       if (isFinished(run.state)) {
         if (run.time === undefined && run.commit !== undefined) run.time = history.find((change) => change.commit === run.commit)?.time;
         continue;
       }
       const change = landed.get(run.id);
       if (change !== undefined) {
-        run.commit = change.commit;
+        this.landedAs(run, change.commit);
         this.setState(run, "landed");
         this.log(run, "platform", "Landed");
       } else if (run.state === "waiting") this.queue.push(run);
@@ -301,8 +304,20 @@ export class Runs {
 
   /** A Run by its id, or else the Run that Landed as commit `id` (as a Replay or Rollback refers to its original). */
   get(id: string): RunView | undefined {
-    const run = this.runs.get(id) ?? [...this.runs.values()].find((candidate) => candidate.commit === id);
+    const run = this.runs.get(id) ?? this.byCommit.get(id);
     return run && copy(run);
+  }
+
+  /** Adds a Run to the list (and, if it has Landed, to the commit lookup). */
+  private remember(run: RunView): void {
+    this.runs.set(run.id, run);
+    if (run.commit !== undefined) this.byCommit.set(run.commit, run);
+  }
+
+  /** Records the commit a Run Landed as. Always set `commit` through here, so `get()` finds it by commit. */
+  private landedAs(run: RunView, commit: string): void {
+    run.commit = commit;
+    this.byCommit.set(commit, run);
   }
 
   /** The Prompts list: every Run ever sent, whatever its kind or state, newest first. */
@@ -415,7 +430,7 @@ export class Runs {
     // Stopped by `close()`: it stays saved as in progress, so it starts again after a restart.
     if (!outcome.landed && signal.aborted) return;
     if (outcome.landed) {
-      run.commit = outcome.commit;
+      this.landedAs(run, outcome.commit);
       delete run.attempted;
       this.setState(run, "landed");
       this.log(run, "platform", "Landed");
@@ -537,14 +552,15 @@ export class Runs {
     return change;
   }
 
-  /** Adds tokens `model` used to the Run's usage, saves it and tells Console clients. */
+  /**
+   * Adds tokens `model` used to the Run's usage, saves it and tells Console
+   * clients. A Run recorded before usage was (no `usageByModel`) keeps no
+   * usage, even if it starts over after the upgrade: a partial count would
+   * look like the whole.
+   */
   private addUsage(run: RunView, model: Model, usage: TokenUsage): void {
-    run.usageByModel ??= {};
-    const sum = (run.usageByModel[model] ??= { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-    sum.inputTokens += usage.inputTokens;
-    sum.outputTokens += usage.outputTokens;
-    sum.cacheReadTokens += usage.cacheReadTokens ?? 0;
-    sum.cacheWriteTokens += usage.cacheWriteTokens ?? 0;
+    if (run.usageByModel === undefined) return;
+    addUsage((run.usageByModel[model] ??= zeroUsage()), usage);
     this.store.save(run);
     this.publish({ type: "run", run: summary(run) });
   }
@@ -584,22 +600,20 @@ function copy(run: RunView): RunView {
     log: run.log.map((entry) => ({ ...entry })),
     ...(run.editing && { editing: [...run.editing] }),
     ...(run.usageByModel && { usageByModel: structuredClone(run.usageByModel), usage: totalUsage(run.usageByModel) }),
+    finished: isFinished(run.state),
   };
 }
 
 function summary(run: RunView): RunSummary {
   const { progress: _progress, editing: _editing, log: _log, attempted: _attempted, usageByModel, ...rest } = run;
-  return { ...rest, ...(run.original && { original: { ...run.original } }), ...(usageByModel && { usage: totalUsage(usageByModel) }) };
+  return { ...rest, ...(run.original && { original: { ...run.original } }), ...(usageByModel && { usage: totalUsage(usageByModel) }), finished: isFinished(run.state) };
 }
 
 /** The tokens of each kind over every model, and their cost with each model at its own prices. */
 function totalUsage(byModel: UsageByModel): RunUsage {
-  const total: RunUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0 };
-  for (const [model, usage] of Object.entries(byModel) as Array<[Model, Required<TokenUsage>]>) {
-    total.inputTokens += usage.inputTokens;
-    total.outputTokens += usage.outputTokens;
-    total.cacheReadTokens += usage.cacheReadTokens;
-    total.cacheWriteTokens += usage.cacheWriteTokens;
+  const total: RunUsage = { ...zeroUsage(), cost: 0 };
+  for (const [model, usage] of Object.entries(byModel) as Array<[Model, UsageCounts]>) {
+    addUsage(total, usage);
     total.cost += costOf(model, usage);
   }
   return total;

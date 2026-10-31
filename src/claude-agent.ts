@@ -1,7 +1,7 @@
 import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { query as sdkQuery, type CanUseTool, type Options, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { unavailableAgent, type Agent, type AgentEvent, type AgentTask, type TokenUsage } from "./agent.ts";
+import { addUsage, unavailableAgent, USAGE_KINDS, zeroUsage, type Agent, type AgentEvent, type AgentTask, type TokenUsage, type UsageCounts } from "./agent.ts";
 import { positiveNumberFromEnvironment } from "./environment.ts";
 
 /** The one call into the Claude Agent SDK; tests substitute a scripted stream. */
@@ -22,17 +22,19 @@ const FILE_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"];
 /** Belt and braces: refused even if some default would offer them. */
 const FORBIDDEN_TOOLS = ["Bash", "BashOutput", "KillShell", "WebFetch", "WebSearch", "Agent", "Task", "NotebookEdit", "Skill", "Workflow"];
 
+/** The mobile rules repeat "Every change works on phones" in starter-canvas/CLAUDE.md word for word; a test keeps them in sync. */
 const PLATFORM_RULES = `You are editing the Canvas, a website shared by the Players of a game, in your current working directory.
 Players send Prompts; do what the Prompt asks by editing files there.
 You can only read and edit files inside the working directory: there is no shell and no network access.
 Make the change and stop; don't ask questions, nobody will answer them.
 
-Players play on phones as well as computers, so every change must work on a phone:
-- Layouts fit narrow screens (from 360px wide) without scrolling sideways.
-- Touch works everywhere a mouse does: use pointer events (pointerdown, pointermove, pointerup) rather than mouse-only events, and set touch-action where dragging would otherwise scroll the page.
-- Nothing only works on hover; anything shown on hover must also be reachable by tapping.
-- Tap targets are at least 44×44px.
-- Every page has <meta name="viewport" content="width=device-width, initial-scale=1"> in its <head>.`;
+Players play on phones as well as computers, so every feature and every page must work on a phone:
+
+- Layouts fit narrow screens (from 360px wide) without scrolling sideways. Prefer flexible widths (\`%\`, \`fr\`, \`min()\`, \`max-width: 100%\`) over fixed pixel widths, and let content wrap.
+- Touch works everywhere a mouse does. Use pointer events (\`pointerdown\`, \`pointermove\`, \`pointerup\`) rather than mouse-only events (\`mousedown\`, \`mousemove\`, \`mouseup\`), and set \`touch-action: none\` on things you drag so the page doesn't scroll instead.
+- Nothing only works on hover. Anything shown on hover must also be reachable by tapping.
+- Tap targets (buttons, links, controls) are at least 44×44px.
+- Every page has \`<meta name="viewport" content="width=device-width, initial-scale=1">\` in its \`<head>\`.`;
 
 /**
  * The real Agent: Claude through the Claude Agent SDK, limited to file tools
@@ -205,12 +207,12 @@ async function realpathOfNearest(target: string): Promise<string> {
  * counts once; the final per-model totals then top up anything missed.
  */
 class UsageTracker {
-  private readonly perMessage = new Map<string, Required<TokenUsage>>();
-  private readonly reported: Required<TokenUsage> = zeroUsage();
+  private readonly perMessage = new Map<string, UsageCounts>();
+  private readonly reported: UsageCounts = zeroUsage();
 
   seeMessage(id: string, usage: Record<string, number | undefined> | undefined): TokenUsage | undefined {
     if (!usage) return undefined;
-    const latest: Required<TokenUsage> = {
+    const latest: UsageCounts = {
       inputTokens: usage.input_tokens ?? 0,
       outputTokens: usage.output_tokens ?? 0,
       cacheReadTokens: usage.cache_read_input_tokens ?? 0,
@@ -224,30 +226,23 @@ class UsageTracker {
   seeTotals(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>): TokenUsage | undefined {
     const totals = zeroUsage();
     for (const usage of Object.values(modelUsage ?? {})) {
-      totals.inputTokens += usage.inputTokens;
-      totals.outputTokens += usage.outputTokens;
-      totals.cacheReadTokens += usage.cacheReadInputTokens ?? 0;
-      totals.cacheWriteTokens += usage.cacheCreationInputTokens ?? 0;
+      addUsage(totals, { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens, cacheReadTokens: usage.cacheReadInputTokens, cacheWriteTokens: usage.cacheCreationInputTokens });
     }
     return this.report(combine(totals, this.reported, (a, b) => Math.max(0, a - b)));
   }
 
   /** Every token so far, of all four kinds. */
   total(): number {
-    return KINDS.reduce((sum, kind) => sum + this.reported[kind], 0);
+    return USAGE_KINDS.reduce((sum, kind) => sum + this.reported[kind], 0);
   }
 
-  private report(delta: Required<TokenUsage>): TokenUsage | undefined {
-    if (KINDS.every((kind) => delta[kind] === 0)) return undefined;
-    for (const kind of KINDS) this.reported[kind] += delta[kind];
+  private report(delta: UsageCounts): TokenUsage | undefined {
+    if (USAGE_KINDS.every((kind) => delta[kind] === 0)) return undefined;
+    addUsage(this.reported, delta);
     return delta;
   }
 }
 
-const KINDS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
-
-const zeroUsage = (): Required<TokenUsage> => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
-
-function combine(a: Required<TokenUsage>, b: Required<TokenUsage>, f: (a: number, b: number) => number): Required<TokenUsage> {
-  return { inputTokens: f(a.inputTokens, b.inputTokens), outputTokens: f(a.outputTokens, b.outputTokens), cacheReadTokens: f(a.cacheReadTokens, b.cacheReadTokens), cacheWriteTokens: f(a.cacheWriteTokens, b.cacheWriteTokens) };
+function combine(a: UsageCounts, b: UsageCounts, f: (a: number, b: number) => number): UsageCounts {
+  return Object.fromEntries(USAGE_KINDS.map((kind) => [kind, f(a[kind], b[kind])])) as UsageCounts;
 }

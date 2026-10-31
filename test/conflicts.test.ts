@@ -201,7 +201,7 @@ describe("Conflict handling", () => {
       expect(agent.tasks[1].instructions).toContain("title it Blank");
       expect(agent.tasks[1].instructions).toMatch(/render/);
       expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(before);
-      expect(await (await platform.consoleApi("/api/history")).json()).toMatchObject([{ prompt: "title it Blank", model: "claude-opus-5-5" }]);
+      expect(await platform.listRuns()).toMatchObject([{ prompt: "title it Blank", model: "claude-opus-5-5", commit: finished.commit }]);
     });
 
     it("restarts after two failed fixes, and rejects the Run if the restart doesn't render either", async () => {
