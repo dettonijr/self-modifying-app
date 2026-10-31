@@ -1,9 +1,13 @@
 #hello button {
   background: var(--color-accent);
-  color: var(--color-surface);
+  color: var(--color-background);
   border: none;
-  border-radius: var(--radius);
+  border-radius: calc(var(--radius) / 1.5);
+  min-height: 44px;
+  min-width: 44px;
   padding: calc(var(--space) / 2) var(--space);
   font: inherit;
+  font-weight: 700;
   cursor: pointer;
+  touch-action: manipulation;
 }

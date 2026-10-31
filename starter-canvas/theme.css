@@ -1,36 +1,67 @@
 /* Shared look of the Canvas. Features style themselves with these variables. */
+/* The colours start as Tokyo Night (Night); this is the Canvas's own copy, so change them freely. */
 :root {
-  --color-background: #fdf6e3;
-  --color-text: #2b2b2b;
-  --color-accent: #e4572e;
-  --color-surface: #ffffff;
-  --font-body: system-ui, sans-serif;
-  --font-heading: Georgia, serif;
-  --radius: 12px;
+  color-scheme: dark;
+  --color-background: #1a1b26;
+  --color-text: #c0caf5;
+  --color-muted: #a9b1d6;
+  --color-accent: #7aa2f7;
+  --color-highlight: #bb9af7;
+  --color-surface: #24283b;
+  --color-border: #3b4261;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-heading: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --radius: 14px;
   --space: 1rem;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  padding: calc(var(--space) * 2);
+  min-height: 100vh;
+  padding: var(--space);
   background: var(--color-background);
   color: var(--color-text);
-  font-family: var(--font-body);
+  font: 17px/1.5 var(--font-body);
+  overflow-wrap: anywhere;
 }
 
 .title {
   font-family: var(--font-heading);
+  font-size: clamp(2rem, 8vw, 3.5rem);
+  line-height: 1.1;
+  margin: calc(var(--space) * 2) 0 calc(var(--space) * 1.5);
   color: var(--color-accent);
+}
+
+.title::after {
+  content: "";
+  display: block;
+  width: 4rem;
+  height: 4px;
+  margin-top: 0.75rem;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-highlight));
 }
 
 .features {
   display: grid;
   gap: var(--space);
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
 }
 
 .feature {
   background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius);
   padding: var(--space);
+}
+
+@media (min-width: 48rem) {
+  body {
+    padding: calc(var(--space) * 2);
+  }
 }

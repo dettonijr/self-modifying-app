@@ -1,0 +1,42 @@
+/*
+ * The platform's palette: every colour on the Console, the Run page and the
+ * Canvas banner and notice comes from these variables. Swap the theme by
+ * changing the values here; a light theme would be a second set of values.
+ *
+ * Tokyo Night (Night), from folke/tokyonight.nvim:
+ * https://github.com/folke/tokyonight.nvim/blob/main/lua/tokyonight/colors/night.lua
+ * (which extends .../colors/storm.lua). The tokyonight names are in comments.
+ *
+ * `:root` styles the Console pages; `[data-palette]` styles the Canvas
+ * overlay's container inside its shadow root, where `:root` matches nothing.
+ */
+:root,
+[data-palette] {
+  color-scheme: dark;
+
+  --color-background: #1a1b26; /* bg */
+  --color-background-deep: #16161e; /* bg_dark */
+  --color-surface: #1f2335; /* bg_dark (Storm) */
+  --color-surface-raised: #292e42; /* bg_highlight */
+  --color-border: #3b4261; /* fg_gutter */
+  --color-border-strong: #545c7e; /* dark3 */
+
+  --color-text: #c0caf5; /* fg */
+  --color-text-muted: #a9b1d6; /* fg_dark: secondary text, still AA on every surface */
+  --color-text-disabled: #565f89; /* comment */
+  --color-on-color: #16161e; /* bg_dark: text on accent, success, warning and danger fills */
+
+  --color-accent: #7aa2f7; /* blue */
+  --color-accent-strong: #89ddff; /* blue5 */
+  --color-info: #7dcfff; /* cyan */
+  --color-claude: #bb9af7; /* magenta */
+  --color-success: #9ece6a; /* green */
+  --color-warning: #e0af68; /* yellow */
+  --color-danger: #f7768e; /* red */
+
+  /* Diff line backgrounds: green2 and red1 blended into bg, as tokyonight derives diff.add and diff.delete. */
+  --color-diff-added: #20303b;
+  --color-diff-removed: #37222c;
+
+  --color-shadow: #0c0e14cc; /* bg_dark1, translucent */
+}

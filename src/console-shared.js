@@ -27,9 +27,11 @@ export function span(className, text) {
   return element;
 }
 
-export function button(text, onClick) {
+/** A button; `look` is "secondary" or "danger" (see console.css), primary if omitted. */
+export function button(text, onClick, look) {
   const element = document.createElement("button");
   element.type = "button";
+  if (look) element.className = look;
   element.textContent = text;
   element.addEventListener("click", onClick);
   return element;
@@ -85,11 +87,11 @@ export function actionsFor(run, { defaultModel, onQueued }) {
   const replay = pausable(button("Replay", () => {
     confirming = { id: run.id, action: "replay", model: defaultModel() };
     showReplayConfirmation(run, actions, onQueued);
-  }));
+  }, "secondary"));
   const rollback = pausable(button("Roll back", () => {
     confirming = { id: run.id, action: "rollback" };
     showRollbackConfirmation(run, actions, onQueued);
-  }));
+  }, "secondary"));
   actions.append(replay, rollback);
   if (confirming?.id === run.id) {
     if (confirming.action === "replay") showReplayConfirmation(run, actions, onQueued);
@@ -117,7 +119,7 @@ function showReplayConfirmation(run, actions, onQueued) {
     closeConfirmation(confirm);
     onQueued(await queueChange("/api/replays", { commit: run.commit, model: model.value }, "Replay", "Claude is working on your Replay…"));
   }));
-  const cancel = button("Cancel", () => closeConfirmation(confirm));
+  const cancel = button("Cancel", () => closeConfirmation(confirm), "secondary");
   confirm.append(question, " ", model, " ", go, " ", cancel);
   actions.append(confirm);
 }
@@ -131,8 +133,8 @@ function showRollbackConfirmation(run, actions, onQueued) {
   const go = pausable(button("Yes, roll back", async () => {
     closeConfirmation(confirm);
     onQueued(await queueChange("/api/rollbacks", { commit: run.commit }, "Rollback", "Rolling it back…"));
-  }));
-  const cancel = button("Keep it", () => closeConfirmation(confirm));
+  }, "danger"));
+  const cancel = button("Keep it", () => closeConfirmation(confirm), "secondary");
   confirm.append(question, " ", go, " ", cancel);
   actions.append(confirm);
 }

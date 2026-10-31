@@ -10,6 +10,8 @@ import { handleServiceRequest, SERVICES_LIBRARY } from "./platform-services.ts";
 /** URL paths under this prefix belong to the platform; Canvas files there are never served. */
 const PLATFORM_PREFIX = "/__platform/";
 const PLATFORM_SCRIPT = readFileSync(new URL("./canvas-platform-script.js", import.meta.url), "utf8");
+// The platform's palette, shared with the Console, for the banner and notice.
+const PALETTE = readFileSync(new URL("./palette.css", import.meta.url), "utf8");
 const PLATFORM_SCRIPT_TAG = `<script src="${PLATFORM_PREFIX}platform.js"></script>`;
 /** `/@<commit>/<path>`: a file as it is at one commit. */
 const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
@@ -42,6 +44,7 @@ export function createCanvasServer(options: { repo: CanvasRepository; channel: C
           return;
         }
         if (platformPath === "platform.js") return send(res, req.method, url.pathname, PLATFORM_SCRIPT, "no-cache");
+        if (platformPath === "palette.css") return send(res, req.method, url.pathname, PALETTE, "no-cache");
         if (platformPath === "services.js") return send(res, req.method, url.pathname, SERVICES_LIBRARY, "no-cache");
         if (platformPath === "events" && req.method === "GET") return await channel.connect(req, res);
         res.writeHead(404).end("Not found");

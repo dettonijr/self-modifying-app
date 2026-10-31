@@ -11,12 +11,25 @@
   const liveUrl = () => (pinned ? pinned[2] : location.pathname) + location.search + location.hash;
 
   // Shadow DOM keeps the Canvas's styles and scripts' selectors away from the platform's UI.
+  // Its `!important` rules on `:host` also beat the Canvas's own `!important` rules on the host element.
+  // Colours come from the platform's palette; the overlay stays hidden until it has loaded.
   const host = document.createElement("platform-overlay");
   const root = host.attachShadow({ mode: "open" });
-  root.innerHTML = `<style>
-    :host { all: initial; position: fixed; inset: 0.75rem 0.75rem auto auto; z-index: 2147483647; display: grid; gap: 0.5rem; justify-items: end; pointer-events: none; font: 14px/1.4 system-ui, sans-serif; }
-    p { margin: 0; padding: 0.5rem 0.9rem; border-radius: 999px; background: #1d1b2fe6; color: #fff; box-shadow: 0 2px 10px #0004; max-width: 32rem; overflow-wrap: anywhere; }
-  </style>`;
+  root.innerHTML = `<link rel="stylesheet" href="/__platform/palette.css"><style>
+    :host { all: initial !important; display: block !important; position: fixed !important; inset: 0 0 auto 0 !important; z-index: 2147483647 !important; pointer-events: none !important; visibility: visible !important; opacity: 1 !important; transform: none !important; filter: none !important; }
+    .overlay { display: grid; gap: 0.5rem; justify-items: end; padding: 0.75rem; font: 600 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--color-text); }
+    .overlay:not(.ready) { visibility: hidden; }
+    p { margin: 0; display: flex; align-items: center; gap: 0.6rem; max-width: min(32rem, 100%); padding: 0.6rem 1rem; border-radius: 14px; border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); box-shadow: 0 6px 24px var(--color-shadow); overflow-wrap: anywhere; }
+    p.banner::before { content: ""; flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--color-accent); animation: pulse 1.2s ease-in-out infinite; }
+    p.notice { border-color: var(--color-success); border-left-width: 5px; }
+    @keyframes pulse { 50% { opacity: 0.25; } }
+    @media (prefers-reduced-motion: reduce) { p.banner::before { animation: none; } }
+    @media (max-width: 30rem) { .overlay { justify-items: stretch; padding: 0.5rem; } p { max-width: none; } }
+  </style><div class="overlay" data-palette></div>`;
+  const overlay = root.querySelector(".overlay");
+  const ready = () => overlay.classList.add("ready");
+  root.querySelector("link").addEventListener("load", ready);
+  root.querySelector("link").addEventListener("error", ready);
   const attach = () => document.documentElement.append(host);
   if (document.body) attach();
   else document.addEventListener("DOMContentLoaded", attach, { once: true });
@@ -25,7 +38,7 @@
   const banners = new Map();
   function showBanner(runId, nickname) {
     if (banners.has(runId)) return;
-    const banner = message(`${nickname} is changing the page…`);
+    const banner = message(`${nickname} is changing the page…`, "banner");
     banner.setAttribute("role", "status");
     banners.set(runId, banner);
   }
@@ -33,10 +46,11 @@
     banners.get(runId)?.remove();
     banners.delete(runId);
   }
-  function message(text) {
+  function message(text, kind) {
     const element = document.createElement("p");
+    element.className = kind;
     element.textContent = text;
-    root.append(element);
+    overlay.append(element);
     return element;
   }
 
@@ -48,7 +62,7 @@
   const notice = sessionStorage.getItem(NOTICE_KEY);
   if (notice) {
     sessionStorage.removeItem(NOTICE_KEY);
-    const element = message(notice);
+    const element = message(notice, "notice");
     element.setAttribute("role", "status");
     setTimeout(() => element.remove(), NOTICE_MS);
   }

@@ -11,6 +11,10 @@ import { ChangeRefused, type Runs, type RunView } from "./runs.ts";
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
 const RUN_PAGE = readFileSync(new URL("./run-page.html", import.meta.url), "utf8");
 const SHARED_SCRIPT = readFileSync(new URL("./console-shared.js", import.meta.url), "utf8");
+const STYLESHEETS: Record<string, string> = {
+  "/palette.css": readFileSync(new URL("./palette.css", import.meta.url), "utf8"),
+  "/console.css": readFileSync(new URL("./console.css", import.meta.url), "utf8"),
+};
 const REFUSAL_STATUS: Record<ChangeRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503, "not-found": 404 };
 
 /**
@@ -28,6 +32,10 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       }
       if (url.pathname === "/console-shared.js" && req.method === "GET") {
         res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache" }).end(SHARED_SCRIPT);
+        return;
+      }
+      if (Object.hasOwn(STYLESHEETS, url.pathname) && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/css; charset=utf-8", "cache-control": "no-cache" }).end(STYLESHEETS[url.pathname]);
         return;
       }
       const runPage = /^\/runs\/([^/]+)$/.exec(url.pathname);
