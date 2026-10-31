@@ -118,6 +118,16 @@ describe("Console UI", () => {
     await page.getByLabel("Prompt").fill("three");
     await expect.poll(() => page.getByRole("button", { name: "Send" }).isDisabled(), { timeout: 10_000 }).toBe(true);
   });
+
+  it("tells the Player why their Prompt didn't Land when the Canvas didn't render", async () => {
+    const { page, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("index.html", "<body></body>"));
+
+    await page.getByLabel("Prompt").fill("blank it");
+    await page.getByRole("button", { name: "Send" }).click();
+
+    await expect.poll(() => page.locator("#status").textContent(), { timeout: 10_000 }).toContain("Canvas didn't render");
+  });
 });
 
 async function join<T extends { page: Page }>(opened: T): Promise<T> {
