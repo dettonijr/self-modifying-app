@@ -134,6 +134,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 ## Spending cap
 
 - **Prices live only in `PRICES` in `src/budget.ts`** (ticket 12), in US dollars per million tokens, taken from the claude-api skill on 2026-10-31: Sonnet 5.5 costs $2 input and $10 output, Opus 5.5 costs $4 and $20. The cost counts input and output tokens only; if the Agent starts reporting cache tokens, extend `TokenUsage` and `PRICES` together.
+- **The host runs Claude on their Claude Max subscription, not API billing** (user, 2026-10-31). The dollar total is therefore a notional figure, not real spend; what actually limits play is Max's usage limits. When those are hit, Runs fail with a usage-limit error that the platform doesn't yet recognise. Open question: whether to switch the cap to tokens and/or pause on usage-limit errors.
 - **All token usage goes through `Budget.record(model, usage)`** (ticket 12). `Runs.runAgent` calls it on every `usage` event, so a failed Run still costs what it used. Conflict resolution (ticket 08) must call it too.
 - **The pause is checked when a Run starts** (ticket 12). `Runs.start` refuses with reason `paused`, and the API answers 503. Replay and Rollback (tickets 09/10) must use the same `budget.spending().paused` check. Runs already in progress are never stopped. The Console is paused when the total is greater than or equal to the cap.
 - **The cap comes from `SPENDING_CAP_USD`** (default $10; the `spendingCapUsd` option in tests). `npm run raise-cap -- <dollars>`, run with `docker compose exec platform`, only raises it.
