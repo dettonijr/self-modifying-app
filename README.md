@@ -21,7 +21,7 @@ Without Docker you need Node 22.18 or later, which runs the TypeScript directly 
 
 ## Layout
 
-- `src/`: the platform. `platform.ts` starts everything. The main pieces are the `canvas-repository.ts` git repo, the `canvas-server.ts` and `console-server.ts` servers (separate origins, the Console UI is `console-page.html`), and the `agent.ts` Agent interface.
+- `src/`: the platform. `platform.ts` starts everything. The main pieces are the `canvas-repository.ts` git repo, the `canvas-server.ts` and `console-server.ts` servers (separate origins, the Console UI is `console-page.html`), and the `agent.ts` Agent interface. The Canvas server redirects pages to `/@<commit>/…` so a page and its files come from one commit, injects `canvas-platform-script.js` into every page, and streams platform events to viewers from `canvas-channel.ts` (Server-Sent Events at `/__platform/events`).
 - A Prompt becomes a Run in `runs.ts`: it validates the Prompt, gives the Run a worktree branched from `main` (under `<data>/worktrees/`), lets the Agent edit it, hands it to the Lander and removes the worktree whatever happens. `lander.ts` commits the worktree and moves `main` to that commit, so the change is live. Every commit records its metadata as git trailers (`Kind`, `Nickname`, `Model`) after the Prompt text, and the history is read back from them.
 - `starter-canvas/`: what a new Canvas repo starts with, including the Canvas `CLAUDE.md` conventions for Claude.
 - `test/`: the test suite. `test/support/` holds the harness.

@@ -49,6 +49,7 @@ export class Runs {
   private readonly worktreesDir: string;
   private readonly runs = new Map<string, RunView>();
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  private readonly listeners = new Set<(run: RunView) => void>();
 
   constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; worktreesDir: string }) {
     this.repo = options.repo;
@@ -66,7 +67,19 @@ export class Runs {
     const abort = new AbortController();
     const done = this.execute(run, abort.signal);
     this.inProgress.set(run.id, { abort, done });
+    this.changed(run);
     return { ...run };
+  }
+
+  /** Calls `listener` with a Run each time one starts or changes state. Returns a function that stops it. */
+  onChange(listener: (run: RunView) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Runs that haven't finished yet. */
+  inProgressRuns(): RunView[] {
+    return [...this.inProgress.keys()].flatMap((id) => this.get(id) ?? []);
   }
 
   get(id: string): RunView | undefined {
@@ -92,6 +105,17 @@ export class Runs {
       run.state = "rejected";
       run.error = outcome.reason;
     }
+    this.changed(run);
+  }
+
+  private changed(run: RunView): void {
+    for (const listener of this.listeners) {
+      try {
+        listener({ ...run });
+      } catch (error) {
+        console.error("A Run listener failed", error);
+      }
+    }
   }
 
   /** Lets the Agent edit a fresh worktree, Lands the result and removes the worktree, whatever happens. */
@@ -102,6 +126,7 @@ export class Runs {
       const failure = await this.runAgent(run, worktree, signal);
       if (failure !== undefined) return { landed: false, reason: failure };
       run.state = "landing";
+      this.changed(run);
       return await this.lander.land(worktree, { kind: "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model });
     } catch (error) {
       console.error(`Run ${run.id} failed`, error);
