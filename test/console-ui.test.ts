@@ -89,6 +89,35 @@ describe("Console UI", () => {
     expect(await (await platform.fetchCanvas("/")).text()).toContain("<h1>Snowing</h1>");
   });
 
+  it("Rolls back a change from the history only after the Player confirms, and lists the Rollback", async () => {
+    const { page, platform, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const history = page.getByTestId("history");
+    await page.reload();
+    const snow = history.locator("li", { hasText: "make it snow" });
+    await snow.waitFor();
+
+    const dialogs: string[] = [];
+    page.once("dialog", (dialog) => {
+      dialogs.push(dialog.message());
+      void dialog.dismiss();
+    });
+    await snow.getByRole("button", { name: "Roll back" }).click();
+    await expect.poll(() => dialogs.length).toBe(1);
+    expect(dialogs[0]).toContain("make it snow");
+    expect(await history.locator("li").count()).toBe(1);
+
+    page.once("dialog", (dialog) => void dialog.accept());
+    await snow.getByRole("button", { name: "Roll back" }).click();
+    await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
+    const entry = history.locator("li").first();
+    expect(await entry.textContent()).toContain("Alice rolled back Bob's");
+    expect(await entry.textContent()).toContain("make it snow");
+    expect(await entry.getByRole("button", { name: "Roll back" }).count()).toBe(1);
+    expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
+  });
+
   it("shows the running cost live to everyone, and the paused state once the spending cap is reached", async () => {
     const { page, platform, agent } = await open(new FakeAgent(), { spendingCapUsd: 2 });
     const watcher = await (await browser.newContext()).newPage();

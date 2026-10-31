@@ -4,12 +4,19 @@ import { fileURLToPath } from "node:url";
 import type { Model } from "./agent.ts";
 import { git, gitBytes, GitError } from "./git.ts";
 
+/** The kinds of change that Land on `main`. */
+export const CHANGE_KINDS = ["Prompt", "Rollback"] as const;
+export type ChangeKind = (typeof CHANGE_KINDS)[number];
+
 /** What every commit on `main` records about the change (besides the Starter Canvas). */
 export interface ChangeMetadata {
-  kind: "Prompt";
+  kind: ChangeKind;
   nickname: string;
+  /** For a Rollback, the Prompt of the change it undoes. */
   prompt: string;
   model: Model;
+  /** The commit a Rollback undoes. */
+  original?: string;
 }
 
 /** A change that Landed, as listed in the history. */
@@ -140,6 +147,32 @@ export class CanvasRepository {
     }
   }
 
+  /**
+   * Reverts `commit` in a worktree as uncommitted edits. Returns whether it
+   * reverted cleanly; if it conflicts, the worktree is left as it was.
+   */
+  async revert(worktree: Worktree, commit: string): Promise<boolean> {
+    try {
+      await git(worktree.dir, ["revert", "--no-commit", commit]);
+      return true;
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      await git(worktree.dir, ["reset", "--quiet", "--hard", "HEAD"]);
+      await git(worktree.dir, ["revert", "--quit"]).catch(() => undefined);
+      return false;
+    }
+  }
+
+  /** The changes `commit` made, as a diff. */
+  diff(commit: string): Promise<string> {
+    return git(this.dir, ["show", "--format=", "--no-color", commit]);
+  }
+
+  /** The change that Landed as `commit`, or `undefined` if it isn't in the history. */
+  async landedChange(commit: string): Promise<LandedChange | undefined> {
+    return (await this.history()).find((change) => change.commit === commit);
+  }
+
   /** Moves `main` to `commit`, only if `main` is still at `expected`. */
   async moveMain(commit: string, expected: string): Promise<void> {
     await git(this.dir, ["update-ref", "refs/heads/main", commit, expected]);
@@ -160,19 +193,20 @@ export class CanvasRepository {
 
   /** The changes `git log <args>` lists, newest first. */
   private async changes(args: string[]): Promise<LandedChange[]> {
-    const fields = ["%H", "%cI", "%(trailers:key=Kind,valueonly)", "%(trailers:key=Nickname,valueonly)", "%(trailers:key=Model,valueonly)", "%B"];
+    const fields = ["%H", "%cI", "%(trailers:key=Kind,valueonly)", "%(trailers:key=Nickname,valueonly)", "%(trailers:key=Model,valueonly)", "%(trailers:key=Original,valueonly)", "%B"];
     const log = await git(this.dir, ["log", `--format=${fields.join("%x1f")}%x1e`, ...args]);
     const changes: LandedChange[] = [];
     for (const entry of log.split("\x1e")) {
-      const [commit, time, kind, nickname, model, message] = entry.trim().split("\x1f");
-      if (!commit || kind?.trim() !== "Prompt") continue;
+      const [commit, time, kind, nickname, model, original, message] = entry.trim().split("\x1f");
+      if (!commit || !CHANGE_KINDS.includes(kind?.trim() as ChangeKind)) continue;
       changes.push({
         commit,
         time,
-        kind: "Prompt",
+        kind: kind.trim() as ChangeKind,
         nickname: nickname.trim(),
         model: model.trim() as Model,
         prompt: promptFromMessage(message),
+        ...(original.trim() === "" ? {} : { original: original.trim() }),
       });
     }
     return changes;
@@ -199,7 +233,7 @@ function commitMessage(change: ChangeMetadata): string {
   return [
     `${change.kind} by ${change.nickname}: ${summary}`,
     change.prompt,
-    [`Kind: ${change.kind}`, `Nickname: ${change.nickname}`, `Model: ${change.model}`].join("\n"),
+    [`Kind: ${change.kind}`, `Nickname: ${change.nickname}`, `Model: ${change.model}`, ...(change.original ? [`Original: ${change.original}`] : [])].join("\n"),
   ].join("\n\n") + "\n";
 }
 

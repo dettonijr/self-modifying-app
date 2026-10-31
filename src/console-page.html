@@ -172,7 +172,7 @@
       who.textContent = run.nickname;
       const prompt = document.createElement("q");
       prompt.textContent = run.prompt;
-      item.append(who, ": ", prompt);
+      item.append(who, run.kind === "Rollback" ? " rolls back " : ": ", prompt);
       return item;
     }
 
@@ -214,9 +214,11 @@
       const response = await fetch("/api/history");
       if (!response.ok) return;
       const changes = await response.json();
+      const byCommit = new Map(changes.map((change) => [change.commit, change]));
       $("history").replaceChildren(
         ...changes.map((change) => {
           const item = document.createElement("li");
+          item.dataset.kind = change.kind;
           const who = document.createElement("strong");
           who.textContent = change.nickname;
           const prompt = document.createElement("q");
@@ -224,10 +226,35 @@
           const time = document.createElement("time");
           time.dateTime = change.time;
           time.textContent = new Date(change.time).toLocaleString();
-          item.append(who, ": ", prompt, " ", time);
+          if (change.kind === "Rollback") {
+            const original = byCommit.get(change.original);
+            item.append("↩ ", who, original ? ` rolled back ${original.nickname}'s ` : " rolled back ", prompt, " ", time);
+          } else {
+            item.append(who, ": ", prompt, " ", time);
+          }
+          item.append(" ", rollbackButton(change));
           return item;
         }),
       );
+    }
+
+    function rollbackButton(change) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = "Roll back";
+      button.addEventListener("click", async () => {
+        if (!confirm(`Roll back ${change.nickname}'s change "${change.prompt}"? Everything that Landed after it is kept.`)) return;
+        const response = await fetch("/api/rollbacks", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ commit: change.commit }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) return setStatus(body.error ?? "The Rollback was refused", true);
+        myRuns.add(body.id);
+        setStatus(body.state === "waiting" ? "Your Rollback is in the queue…" : "Rolling it back…");
+      });
+      return button;
     }
 
     const usd = (amount) => `$${amount.toFixed(2)}`;

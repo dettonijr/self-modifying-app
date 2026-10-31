@@ -3,9 +3,10 @@ import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
-import type { CanvasRepository, ChangeMetadata, Worktree } from "./canvas-repository.ts";
+import type { CanvasRepository, ChangeKind, ChangeMetadata, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
+import { rollbackInstructions, rollbackIntent } from "./rollback.ts";
 import type { RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
@@ -38,9 +39,14 @@ export type RunState = "waiting" | "running" | "landing" | "resolving" | "restar
 export interface RunView {
   id: string;
   state: RunState;
+  /** What the Run Lands as: a Player's own Prompt, or a Rollback of an earlier change. */
+  kind: ChangeKind;
   nickname: string;
+  /** For a Rollback, the Prompt of the change it undoes. */
   prompt: string;
   model: Model;
+  /** The commit a Rollback undoes. */
+  original?: string;
   /** Why the Run was rejected. */
   error?: string;
   /** The commit that Landed. */
@@ -81,6 +87,12 @@ export interface PromptRequest {
   nickname: unknown;
   prompt: unknown;
   model?: unknown;
+}
+
+export interface RollbackRequest {
+  nickname: unknown;
+  /** The commit of the change to undo. */
+  commit: unknown;
 }
 
 export class PromptRefused extends Error {
@@ -132,12 +144,43 @@ export class Runs {
 
   /** Validates a Prompt and queues its Run, or throws `PromptRefused`. Each Player (nickname) may have one Prompt waiting. */
   start(request: PromptRequest): RunView {
-    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    this.refuseIfPaused();
     const { nickname, prompt, model } = validate(request);
-    if (this.queue.some((waiting) => waiting.nickname === nickname)) {
+    return this.enqueue({ id: randomUUID(), state: "waiting", kind: "Prompt", nickname, prompt, model, progress: [] });
+  }
+
+  /**
+   * Queues a Rollback of a change in the history, or throws `PromptRefused`.
+   * It's a Prompt like any other for the pause and the Player's one waiting slot.
+   */
+  async rollback(request: RollbackRequest): Promise<RunView> {
+    this.refuseIfPaused();
+    const nickname = validNickname(request.nickname);
+    if (nickname === undefined) throw new PromptRefused("invalid", "Pick a nickname first");
+    const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
+    if (original === undefined) throw new PromptRefused("invalid", "There's no such change in the history");
+    this.refuseIfPaused();
+    return this.enqueue({
+      id: randomUUID(),
+      state: "waiting",
+      kind: "Rollback",
+      nickname,
+      prompt: original.prompt,
+      model: DEFAULT_MODEL,
+      original: original.commit,
+      progress: [],
+    });
+  }
+
+  private refuseIfPaused(): void {
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+  }
+
+  /** Queues a new Run, unless its Player already has one waiting. */
+  private enqueue(run: RunView): RunView {
+    if (this.queue.some((waiting) => waiting.nickname === run.nickname)) {
       throw new PromptRefused("already-waiting", "You already have a Prompt waiting; you can send another once it starts running");
     }
-    const run: RunView = { id: randomUUID(), state: "waiting", nickname, prompt, model, progress: [] };
     this.runs.set(run.id, run);
     this.queue.push(run);
     this.store.save(run);
@@ -157,12 +200,14 @@ export class Runs {
   async resume(): Promise<void> {
     await this.removeLeftoverWorktrees();
     for (const saved of this.store.recentlyFinished(MAX_RECENT_RUNS)) {
-      const run: RunView = { ...saved, progress: [] };
+      // Runs saved before Rollbacks existed have no kind.
+      const run: RunView = { ...saved, kind: saved.kind ?? "Prompt", progress: [] };
       this.runs.set(run.id, run);
       this.recent.push(run);
     }
     for (const saved of this.store.unfinished()) {
-      const run: RunView = { ...saved, progress: [] };
+      // Runs saved before Rollbacks existed have no kind.
+      const run: RunView = { ...saved, kind: saved.kind ?? "Prompt", progress: [] };
       this.runs.set(run.id, run);
       if (run.state === "waiting") this.queue.push(run);
       else this.startRun(run);
@@ -324,10 +369,16 @@ export class Runs {
     }
   }
 
-  /** Lets the Agent do the Run's work in the worktree, then Lands it. */
+  /**
+   * Lets the Agent do the Run's work in the worktree, then Lands it. A
+   * Rollback is first tried as a mechanical revert, and only needs the Agent
+   * if that conflicts.
+   */
   private async workOnce(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
-    const failure = await this.runAgent(run, worktree, signal, run.prompt, run.model);
-    if (failure !== undefined) return { landed: false, reason: failure };
+    if (!(run.kind === "Rollback" && (await this.repo.revert(worktree, run.original!)))) {
+      const failure = await this.runAgent(run, worktree, signal, await this.instructions(run), run.model);
+      if (failure !== undefined) return { landed: false, reason: failure };
+    }
     this.setState(run, "landing");
     return this.lander.land(worktree, this.change(run));
   }
@@ -365,13 +416,28 @@ export class Runs {
       problem = { kind: "render", problem: failed.problem ?? "unknown" };
     }
     const collided = await this.repo.changesBetween(worktree.base, onto, problem.kind === "conflict" ? conflicts : undefined);
-    const instructions = resolutionInstructions({ prompt: run.prompt, problem, collided });
+    const instructions = resolutionInstructions({ prompt: this.intent(run), problem, collided });
     if ((await this.runAgent(run, worktree, signal, instructions, RESOLUTION_MODEL)) !== undefined) return false;
     return !(await hasConflictMarkers(worktree.dir, conflicts));
   }
 
   private change(run: RunView): ChangeMetadata {
-    return { kind: "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model };
+    const change: ChangeMetadata = { kind: run.kind, nickname: run.nickname, prompt: run.prompt, model: run.model };
+    return run.original === undefined ? change : { ...change, original: run.original };
+  }
+
+  /** What the Agent is asked to do for the Run's own work. */
+  private async instructions(run: RunView): Promise<string> {
+    if (run.kind !== "Rollback") return run.prompt;
+    const original = await this.repo.landedChange(run.original!);
+    if (original === undefined) return this.intent(run);
+    const [diff, since] = await Promise.all([this.repo.diff(original.commit), this.repo.changesBetween(original.commit, await this.repo.main())]);
+    return rollbackInstructions({ original, diff, since });
+  }
+
+  /** What the Run is for, in a sentence the Agent can act on. */
+  private intent(run: RunView): string {
+    return run.kind === "Rollback" ? rollbackIntent({ commit: run.original!, prompt: run.prompt }) : run.prompt;
   }
 
   /** Lets the Agent work in the worktree; returns why it failed, if it did. */
