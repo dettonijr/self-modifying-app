@@ -67,6 +67,17 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Test pitfall: resolution requests use up `FakeAgent` scripts too** (ticket 08). Tell them apart by `task.instructions !== prompt`. A test expecting rejection must queue scripts for both resolutions and the restart, or the extra attempts fail with "no script queued" and the reason changes.
 - **Known flake: under full-suite load, one Playwright test in `platform-services.test.ts` once hit its 30s timeout** (ticket 08); it passed on rerun.
 
+## Replay
+
+- **`POST /api/replays` with `{commit, model?}` and the nickname cookie** (ticket 10) answers 202 with the Run, or 400 (no nickname or bad model), 404 (commit isn't a change on `main`, including the starter Canvas; reason `not-found`), 409 (`already-waiting`) or 503 (paused). Harness: `platform.replay({nickname, commit, model?})`.
+- **Change kinds are listed in `CHANGE_KINDS` in `canvas-repository.ts`** (ticket 10); `history()` and `changesBetween()` list only those kinds. Rollback adds `"Rollback"` there.
+- **The reference to the original is two trailers, `Original: <sha>` and `Original-Nickname: <nick>`**, read back as `LandedChange.original = {commit, nickname}` (ticket 10). The nickname is stored so the credit needs no lookup. Rollback reuses the same field.
+- **`RunView` has optional `kind` (absent means Prompt) and `original`, both saved by `RunStore`** (ticket 10). For a Replay, `run.prompt` is the original Prompt and `run.nickname` is the Player who replayed it.
+- **Replay instructions are built each time work starts** (ticket 10, `Runs.instructions(run, worktree)` → `replayInstructions()` in `src/replay.ts`). Later Prompts come from `changesBetween(original, worktree.base)`, so a Replay that waited or restarted gets the current list. The diff is cut at 40,000 characters (`MAX_REPLAY_DIFF_LENGTH`). Conflict resolution uses `run.prompt`, the original Prompt.
+- **Repository methods** (ticket 10): `landedChange(commit)` returns a change only for a full 40-character hash on `main`; `diff(commit)` returns `git show` output.
+- **`Runs.replay()` checks the pause before and after reading history, then goes through the same `enqueue()` as Prompts** (ticket 10), so it uses the Player's one waiting slot.
+- **Console: each history entry has "Fix it to this!", which opens an inline confirmation with a "Replay model" dropdown** that survives history refreshes (ticket 10). History shows "↻ Alice replayed Bob's 'prompt' `abc1234`"; Replay Runs are marked ↻ in the Runs and queue lists.
+
 ## Render check
 
 - **The render check is its own step in the Lander** (ticket 07): commit the worktree, run the check, then move `main`. Failures return `failure: "render"` (reason "Canvas didn't render") or `failure: "unchanged"`; ticket 08 routes on `failure`. The specific problem is only logged with `console.warn`; Players see "Canvas didn't render".
