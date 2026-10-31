@@ -177,6 +177,16 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **"View the Canvas at this version" is built from the Console's host plus the Canvas port from `GET /api/canvas` (`{port}`, cross-origin refused)** (ticket 04). The port is the `canvasPublicPort` option (env `CANVAS_PUBLIC_PORT`, set in `docker-compose.yml` to `${CANVAS_PORT:-3001}`), else the listening port. `createConsoleServer` needs `canvasPort: () => number`. The link assumes the Canvas is on the same host as the Console and appears only on Landed Runs.
 - **Playwright: use `exact: true` for "Replay" and "Roll back"** (ticket 02); the Run page also has a "Replay of Bob's …" link.
 
+## Run log
+
+- **The Agent interface has a `message` event, `{type: "message", text}`** (Prompts list ticket 03). `ClaudeAgent` emits it only for non-blank `text` blocks of assistant messages, never thinking, tool calls, tool results or the final result text. `FakeAgent` scripts call `run.message(text)`; Runs ignore blank messages.
+- **`RunView.log: LogEntry[]`, with `LogEntry = {time, source: "claude" | "platform", text}`** (ticket 03). It's left out of `RunSummary` and served only by `GET /api/runs/:id` (including the 202 response when a Prompt is queued). Every entry is added through `Runs.log()`, which also sends `{type: "log", runId, entry}` on the WebSocket.
+- **The log lives in its own `log` table in `runs.sqlite` (`seq, run_id, entry` JSON, indexed by run and order), one row per entry via `RunStore.appendLog`** (ticket 03), so long logs never slow down saving a Run. `save()` strips `log`; `all()` attaches each Run's log (`[]` for older Runs). No size limit, as decided.
+- **Platform log lines** (ticket 03): "Queued", "Started", "Rebasing onto the latest Canvas", "Checking that the Canvas renders", "Fixing a conflict (attempt n of 2)" / "Fixing a render failure (attempt n of 2)", "Starting over from the latest Canvas", "Platform restarted, starting over" (`RESTARTED_LOG_TEXT`, added by `resume()` only to Runs that were in progress), "Landed" (also added by `resume()` when it finds a Run already on `main`), and "Rejected: <reason>". A Run aborted by `close()` gets no line; a resumed Run logs "Started" again.
+- **`Lander.land(worktree, change, onStep?)` reports `"rebasing"` and `"render-check"` steps (`LandStep`)** (ticket 03); `Runs.land()` logs them. A Run that changed nothing logs no Landing steps.
+- **The Run page holds live messages that arrive while it's fetching the Run, then handles them in order; the log section skips entries it already shows (same time, source and text)** (ticket 03). This also fixed a ticket 02 bug where such messages were dropped and the page got stuck. Log markup: `ol.entries > li[data-source]` with `time[datetime]`, `.source`, `.text`. Selectors for the Run's own time must be scoped (`.details time`).
+- **The real-Claude smoke test also checks that Claude's messages reach the log** (ticket 03); it hasn't been run since this change.
+
 ## Look and feel
 
 - **The platform pages use the Tokyo Night (Night) palette, dark only for now** (user, 2026-10-31). The Console, Run page and Canvas banner/notice take every colour from one palette file of named variables, so the palette can be swapped by editing that file; a light theme (Tokyo Night Day) would just be a second set of values.
