@@ -1,12 +1,11 @@
 import { readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
-import { isCrossOrigin } from "./http.ts";
+import { isCrossOrigin, readJson, sendJson } from "./http.ts";
 import { PromptRefused, type Runs } from "./runs.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
-const MAX_BODY_BYTES = 16 * 1024;
 const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, busy: 409, paused: 503 };
 
 /** Serves the Console UI and the Console API. */
@@ -55,26 +54,6 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       res.end("Internal error");
     }
   });
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(body));
-}
-
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  for await (const chunk of req as AsyncIterable<Buffer>) {
-    size += chunk.length;
-    if (size > MAX_BODY_BYTES) return undefined;
-    chunks.push(chunk);
-  }
-  try {
-    const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function cookie(req: IncomingMessage, name: string): string | undefined {

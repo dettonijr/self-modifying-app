@@ -54,6 +54,8 @@
   }
 
   const events = new EventSource("/__platform/events");
+  // The services library (/__platform/services.js) shares this stream rather than opening another.
+  Object.defineProperty(window, "__platformEvents", { value: events });
   events.addEventListener("platform", (message) => {
     const event = JSON.parse(message.data);
     if (event.type === "hello") {
