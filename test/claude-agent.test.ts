@@ -167,7 +167,7 @@ describe("The Claude Agent", () => {
       { type: "progress", message: "Editing features/snow/snow.js", file: "features/snow/snow.js" },
       { type: "progress", message: "Editing index.html", file: "index.html" },
     ]);
-    expect(totalUsage(events)).toEqual({ inputTokens: 250, outputTokens: 50 });
+    expect(totalUsage(events)).toEqual({ inputTokens: 250, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0 });
     expect(events.at(-1)).toEqual({ type: "result", outcome: "success" });
   });
 
@@ -193,16 +193,31 @@ describe("The Claude Agent", () => {
     expect(JSON.stringify(events)).not.toMatch(/secret reasoning|hidden|tool input|tool output/);
   });
 
-  it("counts cached input as input, and reconciles with Claude's final totals", async () => {
+  it("reports fresh input, cache reads, cache writes and output separately, and reconciles with Claude's final totals", async () => {
     const worktree = await tempWorktree();
     const { query } = fakeQuery(async function* () {
-      yield assistant("m1", [{ type: "text", text: "Looking" }], { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90 } as never);
-      yield success({ "claude-sonnet-5-5": { inputTokens: 30, outputTokens: 8, cacheReadInputTokens: 90, cacheCreationInputTokens: 0 } });
+      yield assistant("m1", [{ type: "text", text: "Looking" }], { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90, cache_creation_input_tokens: 40 } as never);
+      yield assistant("m1", [{ type: "text", text: "Still looking" }], { input_tokens: 10, output_tokens: 7, cache_read_input_tokens: 90, cache_creation_input_tokens: 40 } as never);
+      yield success({ "claude-sonnet-5-5": { inputTokens: 30, outputTokens: 8, cacheReadInputTokens: 500, cacheCreationInputTokens: 60 } });
     });
 
     const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
 
-    expect(totalUsage(events)).toEqual({ inputTokens: 120, outputTokens: 8 });
+    expect(events.filter((e) => e.type === "usage")[0]).toEqual({ type: "usage", usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 90, cacheWriteTokens: 40 } });
+    expect(totalUsage(events)).toEqual({ inputTokens: 30, outputTokens: 8, cacheReadTokens: 500, cacheWriteTokens: 60 });
+  });
+
+  it("counts cache reads and writes toward the token cap", async () => {
+    const worktree = await tempWorktree();
+    const { query } = fakeQuery(async function* (call) {
+      yield assistant("m1", [{ type: "text", text: "thinking" }], { input_tokens: 10, output_tokens: 10, cache_read_input_tokens: 900, cache_creation_input_tokens: 100 } as never);
+      await aborted(call.options.abortController!.signal);
+      throw new Error("aborted");
+    });
+
+    const events = await collect(agentWith(query, { tokenLimit: 1000 }).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(events.at(-1)).toMatchObject({ type: "result", outcome: "failure", error: expect.stringMatching(/token/i) });
   });
 
   it("reports failure when Claude ends with an error", async () => {
@@ -242,7 +257,7 @@ describe("The Claude Agent", () => {
 
     expect(calls[0].options.abortController!.signal.aborted).toBe(true);
     expect(events.at(-1)).toMatchObject({ type: "result", outcome: "failure", error: expect.stringMatching(/token/i) });
-    expect(totalUsage(events)).toEqual({ inputTokens: 1000, outputTokens: 200 });
+    expect(totalUsage(events)).toEqual({ inputTokens: 1000, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0 });
   });
 
   it("stops a Run that goes over its time cap and reports it as failed", async () => {
@@ -290,11 +305,13 @@ describe("The Claude Agent", () => {
 });
 
 function totalUsage(events: AgentEvent[]) {
-  const total = { inputTokens: 0, outputTokens: 0 };
+  const total = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
   for (const event of events) {
     if (event.type !== "usage") continue;
     total.inputTokens += event.usage.inputTokens;
     total.outputTokens += event.usage.outputTokens;
+    total.cacheReadTokens += event.usage.cacheReadTokens ?? 0;
+    total.cacheWriteTokens += event.usage.cacheWriteTokens ?? 0;
   }
   return total;
 }

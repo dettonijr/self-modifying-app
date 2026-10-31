@@ -13,6 +13,33 @@ export const runUrl = (id) => `/runs/${encodeURIComponent(id)}`;
 
 export const isFinished = (run) => run.state === "landed" || run.state === "rejected";
 
+/** A token count rounded with k or M to at most one decimal: "850", "1.2k", "48k", "1.1M". */
+export function tokenCount(count) {
+  const rounded = (value, suffix) => `${Number(value.toFixed(1))}${suffix}`;
+  if (count < 1000) return String(count);
+  if (Number((count / 1000).toFixed(1)) < 1000) return rounded(count / 1000, "k");
+  return rounded(count / 1_000_000, "M");
+}
+
+/**
+ * "U (T) tokens · ~$C": the tokens that weren't cached (fresh input, cache
+ * writes and output), the total including cache reads, and the estimated
+ * cost. "—" for a Run from before usage was recorded.
+ */
+export function usageLine(usage) {
+  if (!usage) return "—";
+  const uncached = usage.inputTokens + usage.cacheWriteTokens + usage.outputTokens;
+  const cost = usage.cost > 0 && usage.cost < 0.01 ? "<$0.01" : `~$${usage.cost.toFixed(2)}`;
+  return `${tokenCount(uncached)} (${tokenCount(uncached + usage.cacheReadTokens)}) tokens · ${cost}`;
+}
+
+/** The Run's tokens and cost line, for its details. */
+export function usageSpan(run) {
+  const element = span("usage", usageLine(run.usage));
+  if (!run.usage) element.title = "No usage was recorded for this Run";
+  return element;
+}
+
 /** Fills a `<select>` with the models, picking the default. */
 export function fillModels(select) {
   select.replaceChildren(...MODELS.map(({ value, label }) => new Option(label, value)));

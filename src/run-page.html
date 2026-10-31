@@ -102,7 +102,7 @@
   </main>
 
   <script type="module">
-    import { actionsFor, connectLive, isFinished, modelName, runUrl, span } from "/console-shared.js";
+    import { actionsFor, connectLive, isFinished, modelName, runUrl, span, usageSpan } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     // The id from the URL: a Run id, or the commit of a Landed change.
@@ -281,6 +281,7 @@
         time.textContent = new Date(run.time).toLocaleString();
         details.push(" · ", time);
       }
+      details.push(" · ", usageSpan(run));
       if (run.state === "landed") details.push(" · ", span("outcome landed", "Landed"));
       if (run.state === "rejected") details.push(" · ", span("outcome error", run.error ?? "Rejected"));
       $("details").replaceChildren(...details);

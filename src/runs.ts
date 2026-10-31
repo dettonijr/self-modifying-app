@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
+import { DEFAULT_MODEL, MODELS, type Agent, type Model, type TokenUsage } from "./agent.ts";
 import type { CanvasRepository, ChangeKind, ChangeMetadata, LandedChange, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult, LandStep } from "./lander.ts";
 import { rulesFor } from "./change-kinds.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
 import { DEFAULT_MAX_PARALLEL_RUNS } from "./parallel-limit.ts";
+import { costOf } from "./pricing.ts";
 import { isFinished, type RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
@@ -51,6 +52,21 @@ export interface RunView {
   attempted?: string;
   /** What Claude said and what the platform did, oldest first. Every entry is kept, with no limit. */
   log: LogEntry[];
+  /**
+   * Every token the Run's Agent calls used, per model, including conflict
+   * fixes and start-overs. Saved with the Run. Absent for Runs from before
+   * usage was recorded.
+   */
+  usageByModel?: UsageByModel;
+  /** The totals of `usageByModel` and their estimated cost, worked out whenever the Run is read. Never saved. */
+  usage?: RunUsage;
+}
+
+export type UsageByModel = Partial<Record<Model, Required<TokenUsage>>>;
+
+/** A Run's tokens of each kind, over every model, and their estimated cost in US dollars, each model priced at its own rates. */
+export interface RunUsage extends Required<TokenUsage> {
+  cost: number;
 }
 
 /** One line of a Run's log. */
@@ -66,7 +82,7 @@ export interface LogEntry {
  * the files it's editing, its log and its attempted change, which only the
  * Run's own endpoint serves.
  */
-export type RunSummary = Omit<RunView, "progress" | "editing" | "log" | "attempted">;
+export type RunSummary = Omit<RunView, "progress" | "editing" | "log" | "attempted" | "usageByModel">;
 
 export interface RunProgress {
   message: string;
@@ -185,7 +201,7 @@ export class Runs {
   /** Validates a Prompt and queues its Run, or throws `ChangeRefused`. Each Player (nickname) may have one Prompt waiting. */
   start(request: PromptRequest): RunView {
     const { nickname, prompt, model } = validate(request);
-    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, time: now(), progress: [], log: [] });
+    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, time: now(), progress: [], log: [], usageByModel: {} });
   }
 
   /**
@@ -222,6 +238,7 @@ export class Runs {
       time: now(),
       progress: [],
       log: [],
+      usageByModel: {},
     });
   }
 
@@ -520,6 +537,18 @@ export class Runs {
     return change;
   }
 
+  /** Adds tokens `model` used to the Run's usage, saves it and tells Console clients. */
+  private addUsage(run: RunView, model: Model, usage: TokenUsage): void {
+    run.usageByModel ??= {};
+    const sum = (run.usageByModel[model] ??= { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    sum.inputTokens += usage.inputTokens;
+    sum.outputTokens += usage.outputTokens;
+    sum.cacheReadTokens += usage.cacheReadTokens ?? 0;
+    sum.cacheWriteTokens += usage.cacheWriteTokens ?? 0;
+    this.store.save(run);
+    this.publish({ type: "run", run: summary(run) });
+  }
+
   /** Lets the Agent work in the worktree; returns why it failed, if it did. */
   private async runAgent(run: RunView, worktree: Worktree, signal: AbortSignal, instructions: string, model: Model): Promise<string | undefined> {
     const events = this.agent.run({ worktree: worktree.dir, instructions, model, signal });
@@ -536,6 +565,7 @@ export class Runs {
         }
       }
       if (event.type === "message" && event.text.trim() !== "") this.log(run, "claude", event.text);
+      if (event.type === "usage") this.addUsage(run, model, event.usage);
       if (event.type === "result") return event.outcome === "failure" ? event.error : undefined;
     }
     return "The Agent stopped without a result";
@@ -553,12 +583,26 @@ function copy(run: RunView): RunView {
     progress: run.progress.map((progress) => ({ ...progress })),
     log: run.log.map((entry) => ({ ...entry })),
     ...(run.editing && { editing: [...run.editing] }),
+    ...(run.usageByModel && { usageByModel: structuredClone(run.usageByModel), usage: totalUsage(run.usageByModel) }),
   };
 }
 
 function summary(run: RunView): RunSummary {
-  const { progress: _progress, editing: _editing, log: _log, attempted: _attempted, ...rest } = run;
-  return { ...rest, ...(run.original && { original: { ...run.original } }) };
+  const { progress: _progress, editing: _editing, log: _log, attempted: _attempted, usageByModel, ...rest } = run;
+  return { ...rest, ...(run.original && { original: { ...run.original } }), ...(usageByModel && { usage: totalUsage(usageByModel) }) };
+}
+
+/** The tokens of each kind over every model, and their cost with each model at its own prices. */
+function totalUsage(byModel: UsageByModel): RunUsage {
+  const total: RunUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0 };
+  for (const [model, usage] of Object.entries(byModel) as Array<[Model, Required<TokenUsage>]>) {
+    total.inputTokens += usage.inputTokens;
+    total.outputTokens += usage.outputTokens;
+    total.cacheReadTokens += usage.cacheReadTokens;
+    total.cacheWriteTokens += usage.cacheWriteTokens;
+    total.cost += costOf(model, usage);
+  }
+  return total;
 }
 
 /** A Landed change from before Runs were saved, as a Landed Run. Its id is its `Run` trailer, or else its commit. */

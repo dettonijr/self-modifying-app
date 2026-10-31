@@ -21,9 +21,15 @@ export interface AgentTask {
   signal?: AbortSignal;
 }
 
+/** Tokens by kind, each priced at its own rate. The cache counts are 0 when absent. */
 export interface TokenUsage {
+  /** Fresh input: not read from or written to the prompt cache. */
   inputTokens: number;
   outputTokens: number;
+  /** Input read from the prompt cache. */
+  cacheReadTokens?: number;
+  /** Input written to the prompt cache. */
+  cacheWriteTokens?: number;
 }
 
 export type AgentEvent =

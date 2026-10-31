@@ -81,7 +81,7 @@
   </main>
 
   <script type="module">
-    import { actionsFor, connectLive, fillModels, isFinished, modelName, runUrl, span } from "/console-shared.js";
+    import { actionsFor, connectLive, fillModels, isFinished, modelName, runUrl, span, usageSpan } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     fillModels($("model"));
@@ -208,6 +208,7 @@
         time.textContent = new Date(run.time).toLocaleString();
         details.append(" · ", time);
       }
+      details.append(" · ", usageSpan(run));
       if (run.state === "landed") details.append(" · ", span("outcome landed", "Landed"));
       if (run.state === "rejected") details.append(" · ", span("outcome error", run.error ?? "Rejected"));
       item.append(details);

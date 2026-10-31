@@ -12,7 +12,7 @@ export interface ClaudeAgentOptions {
   apiKey: string;
   /** A Run still working after this long is stopped and fails. */
   timeLimitMs: number;
-  /** A Run that uses more tokens than this (input, cached input and output) is stopped and fails. */
+  /** A Run that uses more tokens than this (fresh input, cache reads, cache writes and output) is stopped and fails. */
   tokenLimit: number;
   query?: ClaudeQuery;
 }
@@ -199,43 +199,55 @@ async function realpathOfNearest(target: string): Promise<string> {
 }
 
 /**
- * Turns the SDK's per-message usage into incremental usage events. A message
- * can arrive in several parts with growing usage, so each id's latest usage
+ * Turns the SDK's per-message usage into incremental usage events, with fresh
+ * input, cache reads, cache writes and output kept apart. A message can
+ * arrive in several parts with growing usage, so each id's latest usage
  * counts once; the final per-model totals then top up anything missed.
  */
 class UsageTracker {
-  private readonly perMessage = new Map<string, TokenUsage>();
-  private readonly reported: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+  private readonly perMessage = new Map<string, Required<TokenUsage>>();
+  private readonly reported: Required<TokenUsage> = zeroUsage();
 
   seeMessage(id: string, usage: Record<string, number | undefined> | undefined): TokenUsage | undefined {
     if (!usage) return undefined;
-    const latest = {
-      inputTokens: (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+    const latest: Required<TokenUsage> = {
+      inputTokens: usage.input_tokens ?? 0,
       outputTokens: usage.output_tokens ?? 0,
+      cacheReadTokens: usage.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: usage.cache_creation_input_tokens ?? 0,
     };
-    const previous = this.perMessage.get(id) ?? { inputTokens: 0, outputTokens: 0 };
-    this.perMessage.set(id, { inputTokens: Math.max(previous.inputTokens, latest.inputTokens), outputTokens: Math.max(previous.outputTokens, latest.outputTokens) });
-    return this.report(Math.max(0, latest.inputTokens - previous.inputTokens), Math.max(0, latest.outputTokens - previous.outputTokens));
+    const previous = this.perMessage.get(id) ?? zeroUsage();
+    this.perMessage.set(id, combine(previous, latest, Math.max));
+    return this.report(combine(latest, previous, (a, b) => Math.max(0, a - b)));
   }
 
   seeTotals(modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>): TokenUsage | undefined {
-    let input = 0;
-    let output = 0;
+    const totals = zeroUsage();
     for (const usage of Object.values(modelUsage ?? {})) {
-      input += usage.inputTokens + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0);
-      output += usage.outputTokens;
+      totals.inputTokens += usage.inputTokens;
+      totals.outputTokens += usage.outputTokens;
+      totals.cacheReadTokens += usage.cacheReadInputTokens ?? 0;
+      totals.cacheWriteTokens += usage.cacheCreationInputTokens ?? 0;
     }
-    return this.report(Math.max(0, input - this.reported.inputTokens), Math.max(0, output - this.reported.outputTokens));
+    return this.report(combine(totals, this.reported, (a, b) => Math.max(0, a - b)));
   }
 
+  /** Every token so far, of all four kinds. */
   total(): number {
-    return this.reported.inputTokens + this.reported.outputTokens;
+    return KINDS.reduce((sum, kind) => sum + this.reported[kind], 0);
   }
 
-  private report(inputTokens: number, outputTokens: number): TokenUsage | undefined {
-    if (inputTokens === 0 && outputTokens === 0) return undefined;
-    this.reported.inputTokens += inputTokens;
-    this.reported.outputTokens += outputTokens;
-    return { inputTokens, outputTokens };
+  private report(delta: Required<TokenUsage>): TokenUsage | undefined {
+    if (KINDS.every((kind) => delta[kind] === 0)) return undefined;
+    for (const kind of KINDS) this.reported[kind] += delta[kind];
+    return delta;
   }
+}
+
+const KINDS = ["inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens"] as const;
+
+const zeroUsage = (): Required<TokenUsage> => ({ inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+
+function combine(a: Required<TokenUsage>, b: Required<TokenUsage>, f: (a: number, b: number) => number): Required<TokenUsage> {
+  return { inputTokens: f(a.inputTokens, b.inputTokens), outputTokens: f(a.outputTokens, b.outputTokens), cacheReadTokens: f(a.cacheReadTokens, b.cacheReadTokens), cacheWriteTokens: f(a.cacheWriteTokens, b.cacheWriteTokens) };
 }
