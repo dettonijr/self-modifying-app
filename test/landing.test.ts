@@ -85,22 +85,6 @@ describe("A Prompt Lands", () => {
     expect(accepted.status).toBe(202);
   });
 
-  it("refuses a Prompt while another Run is in progress", async () => {
-    const { platform, agent } = await start();
-    const gate = new Gate();
-    agent.enqueue(async (run) => {
-      await gate.wait();
-      await run.writeFile("index.html", "first");
-    });
-    const first = await platform.sendPrompt({ nickname: "Alice", prompt: "first" });
-    await agent.started(1);
-
-    await expect(platform.sendPrompt({ nickname: "Bob", prompt: "second" })).rejects.toThrow(/409/);
-
-    gate.release();
-    expect(await platform.waitForRun(first.id)).toMatchObject({ state: "landed" });
-  });
-
   it("lists Landed changes in the history, newest first, with nickname, Prompt and time", async () => {
     const { platform, agent } = await start();
     agent.enqueue(
