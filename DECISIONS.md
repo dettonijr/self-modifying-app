@@ -31,7 +31,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Token usage counts cached input as input** (ticket 03), so costs come out slightly high. Usage events are deltas; the final event tops up the difference to the SDK's totals, so the sum of usage events is authoritative.
 - **Progress events cover only `Write` and `Edit`** (ticket 03), each saying "Editing <path relative to the worktree>".
 - **Dependency: `@anthropic-ai/claude-agent-sdk` 0.3.316** (ticket 03). It ships the Claude executable as a separate package per platform, which `npm ci` in Docker installs to match the image.
-- **Smoke test: `CLAUDE_SMOKE_TEST=1` plus `ANTHROPIC_API_KEY`** (ticket 03). It uses Sonnet 5.5 and passes when the page's `<h1>` or `<title>` becomes "Hello". In this sandbox the proxy supplies a real key, so any non-empty key works.
+- **Smoke test: `CLAUDE_SMOKE_TEST=1` plus `ANTHROPIC_API_KEY`** (ticket 03). It uses Sonnet 5.5 and passes when the page's `<h1>` or `<title>` becomes "Hello". Correction (2026-10-31): the sandbox proxy does *not* inject Anthropic credentials (`SBX_CRED_ANTHROPIC_MODE=none`). This sandbox's Claude login is a claude.ai OAuth token (the host's Max subscription) in `~/.claude/.credentials.json`; the smoke test most likely authenticated through that file, not through the dummy key. The Docker container has no such file, so Runs there have no working credential unless one is provided.
 
 ## Canvas serving and live reload
 
