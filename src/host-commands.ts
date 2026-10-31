@@ -1,4 +1,5 @@
 import { configuredCapUsd, formatUsd, raiseCap } from "./budget.ts";
+import { setMaxParallelRuns } from "./parallel-limit.ts";
 
 export interface HostCommandResult {
   exitCode: number;
@@ -17,7 +18,17 @@ export function runHostCommand(args: string[], env: NodeJS.ProcessEnv = process.
       const cap = raiseCap(dataDir, Number(rest[0]), configuredCapUsd(env));
       return { exitCode: 0, output: `The spending cap is now ${formatUsd(cap)}. The Console resumes if the total is below it.` };
     }
-    return { exitCode: 2, output: "Usage: raise-cap <dollars>   Raise the spending cap, e.g. raise-cap 20" };
+    if (command === "set-parallel-runs" && rest.length === 1) {
+      const limit = setMaxParallelRuns(dataDir, Number(rest[0]));
+      return { exitCode: 0, output: `Up to ${limit} Runs may now be in progress at once. Runs already in progress carry on.` };
+    }
+    return {
+      exitCode: 2,
+      output: [
+        "Usage: raise-cap <dollars>          Raise the spending cap, e.g. raise-cap 20",
+        "       set-parallel-runs <count>    Set how many Runs may be in progress at once, e.g. set-parallel-runs 2",
+      ].join("\n"),
+    };
   } catch (error) {
     return { exitCode: 1, output: error instanceof Error ? error.message : String(error) };
   }

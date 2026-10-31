@@ -6,6 +6,11 @@ export type SavedRun = Omit<RunView, "progress">;
 
 const FINISHED: readonly RunState[] = ["landed", "rejected"];
 
+/** Whether a Run in `state` has finished. Any state not listed in `FINISHED` counts as unfinished. */
+export function isFinished(state: RunState): boolean {
+  return FINISHED.includes(state);
+}
+
 /**
  * Saves the queue and Run records in a SQLite file in the data folder, so they
  * survive a restart. Each Run is one row: its state in its own column, so it

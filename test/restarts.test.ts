@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { onTestFinished, describe, expect, it } from "vitest";
+import { RunStore } from "../src/run-store.ts";
 import { FakeAgent, Gate, type FakeAgentContext } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform } from "./support/harness.ts";
 
@@ -75,6 +76,59 @@ describe("Surviving restarts", () => {
     expect(seen).toEqual({ rain: "rain", half: false });
     expect(await (await after.platform.fetchCanvas("/features/snow/snow.js")).text()).toBe("snow");
     expect(await (await after.platform.fetchCanvas("/features/rain/rain.js")).text()).toBe("rain");
+  });
+
+  it("puts Runs that were in progress at the front of the queue, within the parallel limit", async () => {
+    const dataDir = await dataFolder();
+    const before = await start(dataDir, { maxParallelRuns: 2 });
+    before.agent.enqueue(interruptedByRestart, interruptedByRestart);
+    const alice = await before.platform.sendPrompt({ nickname: "Alice", prompt: "snow" });
+    const bob = await before.platform.sendPrompt({ nickname: "Bob", prompt: "rain" });
+    await before.agent.started(2);
+    const carol = await before.platform.sendPrompt({ nickname: "Carol", prompt: "wind" });
+    await before.platform.close();
+
+    const after = await start(dataDir, { maxParallelRuns: 1 });
+    const gates = new Map(["snow", "rain", "wind"].map((prompt) => [prompt, new Gate()]));
+    const held = async (run: FakeAgentContext) => {
+      await Promise.race([gates.get(run.task.instructions)!.wait(), run.aborted()]);
+      await run.writeFile(`features/${run.task.instructions}/index.js`, run.task.instructions);
+    };
+    after.agent.enqueue(held, held, held);
+    await after.agent.started(1);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(after.agent.tasks.map((task) => task.instructions)).toEqual(["snow"]);
+
+    gates.get("snow")!.release();
+    expect(await after.platform.waitForRun(alice.id)).toMatchObject({ state: "landed" });
+    await after.agent.started(2);
+    expect(after.agent.tasks.map((task) => task.instructions)).toEqual(["snow", "rain"]);
+    gates.get("rain")!.release();
+    gates.get("wind")!.release();
+    expect(await after.platform.waitForRun(bob.id)).toMatchObject({ state: "landed" });
+    expect(await after.platform.waitForRun(carol.id)).toMatchObject({ state: "landed" });
+    expect(after.agent.tasks.map((task) => task.instructions)).toEqual(["snow", "rain", "wind"]);
+  });
+
+  it("doesn't Land a Run twice when the platform stopped after main moved but before the Run was saved as Landed", async () => {
+    const dataDir = await dataFolder();
+    const before = await start(dataDir);
+    before.agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
+    const snow = await before.platform.waitForRun((await before.platform.sendPrompt({ nickname: "Alice", prompt: "make it snow" })).id);
+    expect(snow).toMatchObject({ state: "landed" });
+    await before.platform.close();
+    const canvas = path.join(dataDir, "canvas");
+    expect(execFileSync("git", ["log", "-1", "--format=%(trailers:key=Run,valueonly)", "main"], { cwd: canvas, encoding: "utf8" }).trim()).toBe(snow.id);
+    // As if the process was killed between moving main and saving the Run as Landed.
+    const store = new RunStore(path.join(dataDir, "runs.sqlite"));
+    const { commit: _commit, ...unsaved } = { ...snow, state: "landing" as const, progress: [] };
+    store.save(unsaved as Parameters<RunStore["save"]>[0]);
+    store.close();
+
+    const after = await start(dataDir);
+    expect(await after.platform.waitForRun(snow.id)).toMatchObject({ state: "landed", commit: snow.commit });
+    expect(after.agent.tasks).toHaveLength(0);
+    expect(execFileSync("git", ["rev-parse", "main"], { cwd: canvas, encoding: "utf8" }).trim()).toBe(snow.commit);
   });
 
   it("removes worktrees left over from before the restart", async () => {

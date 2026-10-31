@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { runHostCommand } from "../src/host-commands.ts";
-import { DEFAULT_MAX_PARALLEL_RUNS, maxParallelRunsFromEnvironment } from "../src/runs.ts";
+import { DEFAULT_MAX_PARALLEL_RUNS, maxParallelRunsFromEnvironment } from "../src/parallel-limit.ts";
 import { FakeAgent, Gate, type FakeAgentContext } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform, type TestPlatformOptions } from "./support/harness.ts";
 
@@ -114,6 +114,66 @@ describe("Parallel Runs", () => {
     expect(agent.tasks).toHaveLength(2);
     go.release();
     expect(await platform.waitForRun(third.id)).toMatchObject({ state: "landed" });
+  });
+
+  it("lets the host raise the limit during play, and the platform picks it up", async () => {
+    const { platform, agent } = await start({ maxParallelRuns: 1 });
+    const go = new Gate();
+    const held = (feature: string) => async (run: FakeAgentContext) => {
+      await Promise.race([go.wait(), run.aborted()]);
+      await run.writeFile(`features/${feature}/${feature}.js`, feature);
+    };
+    agent.enqueue(held("a"), held("b"));
+    await platform.sendPrompt({ nickname: "a", prompt: "a" });
+    await agent.started(1);
+    const second = await platform.sendPrompt({ nickname: "b", prompt: "b" });
+    expect(second).toMatchObject({ state: "waiting" });
+
+    const result = runHostCommand(["set-parallel-runs", "2"], { DATA_DIR: platform.dataDir });
+    expect(result).toMatchObject({ exitCode: 0 });
+    expect(result.output).toMatch(/2/);
+    await agent.started(2);
+    go.release();
+    expect(await platform.waitForRun(second.id)).toMatchObject({ state: "landed" });
+  });
+
+  it("lets the host lower the limit during play without stopping Runs in progress", async () => {
+    const { platform, agent } = await start({ maxParallelRuns: 2 });
+    const gates = new Map(["a", "b", "c"].map((feature) => [feature, new Gate()]));
+    const held = async (run: FakeAgentContext) => {
+      const [feature, gate] = [...gates].find(([feature]) => run.task.instructions === feature)!;
+      await Promise.race([gate.wait(), run.aborted()]);
+      await run.writeFile(`features/${feature}/${feature}.js`, feature);
+    };
+    agent.enqueue(held, held, held, (run) => run.writeFile("features/d/d.js", "d"));
+    const running = [await platform.sendPrompt({ nickname: "a", prompt: "a" }), await platform.sendPrompt({ nickname: "b", prompt: "b" })];
+    await agent.started(2);
+
+    expect(runHostCommand(["set-parallel-runs", "1"], { DATA_DIR: platform.dataDir }).exitCode).toBe(0);
+    const third = await platform.sendPrompt({ nickname: "c", prompt: "c" });
+    const fourth = await platform.sendPrompt({ nickname: "d", prompt: "d" });
+    // Both Runs in progress carry on.
+    gates.get("a")!.release();
+    expect(await platform.waitForRun(running[0].id)).toMatchObject({ state: "landed" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // One Run is still in progress, so nothing new starts under a limit of 1.
+    expect(agent.tasks).toHaveLength(2);
+    gates.get("b")!.release();
+    expect(await platform.waitForRun(running[1].id)).toMatchObject({ state: "landed" });
+    await agent.started(3);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(agent.tasks).toHaveLength(3);
+    expect(await (await platform.consoleApi(`/api/runs/${fourth.id}`)).json()).toMatchObject({ state: "waiting" });
+    gates.get("c")!.release();
+    expect(await platform.waitForRun(third.id)).toMatchObject({ state: "landed" });
+    expect(await platform.waitForRun(fourth.id)).toMatchObject({ state: "landed" });
+  });
+
+  it("refuses a parallel limit that isn't a whole number of at least 1", () => {
+    for (const bad of ["0", "-1", "2.5", "lots"]) {
+      expect(runHostCommand(["set-parallel-runs", bad], { DATA_DIR: "/nonexistent" })).toMatchObject({ exitCode: 1 });
+    }
+    expect(runHostCommand(["set-parallel-runs"], { DATA_DIR: "/nonexistent" })).toMatchObject({ exitCode: 2 });
   });
 
   it("reads the limit from MAX_PARALLEL_RUNS, defaulting to 3, and refuses anything but a whole number of at least 1", () => {

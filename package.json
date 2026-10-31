@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node src/main.ts",
     "raise-cap": "node src/cli.ts raise-cap",
+    "set-parallel-runs": "node src/cli.ts set-parallel-runs",
     "test": "vitest run",
     "typecheck": "tsc"
   },

@@ -1,10 +1,11 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Model } from "./agent.ts";
+import { DEFAULT_MODEL, type Model } from "./agent.ts";
 import type { LandedChange } from "./canvas-repository.ts";
+import { promptList } from "./change-context.ts";
 
 /** Conflict resolution always uses this model, whatever the Run's own model. */
-export const RESOLUTION_MODEL: Model = "claude-sonnet-5-5";
+export const RESOLUTION_MODEL: Model = DEFAULT_MODEL;
 
 /** Up to this many resolution attempts before a Run starts over. */
 export const MAX_RESOLUTION_ATTEMPTS = 2;
@@ -34,10 +35,6 @@ export function resolutionInstructions(options: { prompt: string; problem: Resol
           "Resolve every conflict and remove all the markers.",
         ]
       : [`After this change, the Canvas page didn't render: ${problem.problem}.`, "Fix it so that the page renders."];
-  const others =
-    collided.length === 0
-      ? ["No other changes Landed in the meantime."]
-      : ["The Prompts of the changes it collided with, oldest first:", ...collided.map((change) => `- ${change.nickname}: ${change.prompt}`)];
   return [
     ...what,
     "Respect both intentions: keep what this change's Prompt asked for and what the other Prompts asked for. Don't undo the other changes.",
@@ -45,7 +42,7 @@ export function resolutionInstructions(options: { prompt: string; problem: Resol
     "This change's Prompt:",
     prompt,
     "",
-    ...others,
+    ...promptList(collided, { heading: "The Prompts of the changes it collided with, oldest first:", none: "No other changes Landed in the meantime." }),
   ].join("\n");
 }
 

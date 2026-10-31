@@ -10,6 +10,7 @@ import { KeyValueStore } from "./key-value-store.ts";
 import { Lander } from "./lander.ts";
 import { RenderCheck } from "./render-check.ts";
 import { RunStore } from "./run-store.ts";
+import { currentMaxParallelRuns, DEFAULT_MAX_PARALLEL_RUNS } from "./parallel-limit.ts";
 import { Runs } from "./runs.ts";
 
 export interface PlatformOptions {
@@ -23,7 +24,7 @@ export interface PlatformOptions {
   canvasPort?: number;
   /** Spending cap in US dollars; `DEFAULT_SPENDING_CAP_USD` if omitted. */
   spendingCapUsd?: number;
-  /** How many Runs may be in progress at once; `DEFAULT_MAX_PARALLEL_RUNS` if omitted. */
+  /** How many Runs may be in progress at once to start with; `DEFAULT_MAX_PARALLEL_RUNS` if omitted. The host can change it with `set-parallel-runs`. */
   maxParallelRuns?: number;
 }
 
@@ -48,7 +49,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
     budget,
     store: runStore,
     worktreesDir: path.join(options.dataDir, "worktrees"),
-    maxParallelRuns: options.maxParallelRuns,
+    maxParallelRuns: () => currentMaxParallelRuns(options.dataDir, options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS),
   });
 
   const consoleServer = createConsoleServer({ runs, repo, budget });

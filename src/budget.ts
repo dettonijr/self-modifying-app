@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Model, TokenUsage } from "./agent.ts";
+import { readNumber, writeJsonAtomically } from "./data-files.ts";
 
 /**
  * US dollars per million tokens, Anthropic first-party API rates (checked
@@ -87,25 +87,4 @@ export class Budget {
     const capUsd = currentCapUsd(this.dataDir, this.configuredCap);
     return { totalUsd: this.totalUsd, capUsd, paused: this.totalUsd >= capUsd };
   }
-}
-
-function readNumber(file: string, key: string): number | undefined {
-  let text: string;
-  try {
-    text = readFileSync(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-    throw error;
-  }
-  const value: unknown = (JSON.parse(text) as Record<string, unknown>)[key];
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(`${file} has no valid ${key}`);
-  return value;
-}
-
-/** Writes to a temporary file first, so a crash never leaves a half-written file. */
-function writeJsonAtomically(file: string, value: unknown): void {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, JSON.stringify(value) + "\n");
-  renameSync(temporary, file);
 }

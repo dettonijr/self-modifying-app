@@ -31,7 +31,7 @@ export class RenderCheck {
     // in-memory store, so the candidate's code can't change the features' real data.
     const channel = new CanvasChannel({ greeting: async () => ({ type: "hello", commit, running: [] }) });
     const store = new KeyValueStore(":memory:");
-    const server = createCanvasServer({ repo: this.repo, channel, store });
+    const server = createCanvasServer({ repo: this.repo, channel, store, anyCommit: true });
     const port = await listen(server, 0, "127.0.0.1");
     const context = await (await this.launch()).newContext();
     try {

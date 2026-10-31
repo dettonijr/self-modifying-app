@@ -144,6 +144,13 @@ describe("Console UI", () => {
     await join({ page });
     await page.getByLabel("Prompt").fill("three");
     await expect.poll(() => page.getByRole("button", { name: "Send" }).isDisabled(), { timeout: 10_000 }).toBe(true);
+    const history = page.getByTestId("history");
+    await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
+    for (const name of ["Fix it to this!", "Roll back"]) {
+      const buttons = history.getByRole("button", { name });
+      await expect.poll(() => buttons.count()).toBe(2);
+      for (const button of await buttons.all()) await expect.poll(() => button.isDisabled(), { timeout: 10_000 }).toBe(true);
+    }
   });
 
   it("tells the Player why their Prompt didn't Land when the Canvas didn't render", async () => {

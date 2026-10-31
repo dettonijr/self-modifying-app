@@ -68,7 +68,7 @@ describe("Rollback", () => {
 
     expect(finished).toMatchObject({ state: "landed", nickname: "Carol" });
     const task = agent.tasks[2];
-    expect(task.instructions).toMatch(/undo this change, and keep what came after/i);
+    expect(task.instructions).toMatch(/roll back this change, and keep what came after/i);
     expect(task.instructions).toContain("title it Snow");
     expect(task.instructions).toContain("<h1>Snow</h1>");
     expect(task.instructions).toContain("Bob: title it Rain");
@@ -121,6 +121,18 @@ describe("Rollback", () => {
     });
     await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it rain" })).id);
     expect((await rollback(platform, "Carol", snow.commit!)).status).toBe(503);
+  });
+
+  it("says so when the change is already undone", async () => {
+    const { platform, agent } = await start();
+    const snow = await land(platform, agent, "Alice", "make it snow", (run) => run.writeFile("features/snow/snow.js", "snow"));
+    const undone = await platform.waitForRun(((await (await rollback(platform, "Carol", snow.commit!)).json()) as RunView).id);
+    expect(undone).toMatchObject({ state: "landed" });
+
+    const again = await platform.waitForRun(((await (await rollback(platform, "Dave", snow.commit!)).json()) as RunView).id);
+    expect(again).toMatchObject({ state: "rejected", error: "That change is already undone" });
+    expect(agent.tasks).toHaveLength(1);
+    expect(git(platform, ["rev-parse", "main"])).toBe(undone.commit);
   });
 
   it("can roll back a Rollback, bringing the change back", async () => {

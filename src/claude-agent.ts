@@ -2,6 +2,7 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { query as sdkQuery, type CanUseTool, type Options, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { unavailableAgent, type Agent, type AgentEvent, type AgentTask, type TokenUsage } from "./agent.ts";
+import { positiveNumberFromEnvironment } from "./environment.ts";
 
 /** The one call into the Claude Agent SDK; tests substitute a scripted stream. */
 export type ClaudeQuery = (params: { prompt: string; options: Options }) => AsyncIterable<SDKMessage>;
@@ -126,17 +127,9 @@ export function agentFromEnvironment(env: NodeJS.ProcessEnv): Agent {
   if (!apiKey) return unavailableAgent;
   return new ClaudeAgent({
     apiKey,
-    timeLimitMs: positiveNumber(env, "RUN_TIME_LIMIT_SECONDS", DEFAULT_TIME_LIMIT_SECONDS) * 1000,
-    tokenLimit: positiveNumber(env, "RUN_TOKEN_LIMIT", DEFAULT_TOKEN_LIMIT),
+    timeLimitMs: positiveNumberFromEnvironment(env, "RUN_TIME_LIMIT_SECONDS", DEFAULT_TIME_LIMIT_SECONDS) * 1000,
+    tokenLimit: positiveNumberFromEnvironment(env, "RUN_TOKEN_LIMIT", DEFAULT_TOKEN_LIMIT),
   });
-}
-
-function positiveNumber(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
-  const value = env[name];
-  if (value === undefined || value === "") return fallback;
-  const number = Number(value);
-  if (!Number.isFinite(number) || number <= 0) throw new Error(`${name} must be a positive number, not "${value}"`);
-  return number;
 }
 
 function promptFor(task: AgentTask): string {

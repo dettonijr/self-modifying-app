@@ -5,29 +5,14 @@ import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository, ChangeKind, ChangeMetadata, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
+import { rulesFor } from "./change-kinds.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
-import { replayInstructions } from "./replay.ts";
-import { rollbackInstructions, rollbackIntent } from "./rollback.ts";
-import type { RunStore } from "./run-store.ts";
+import { DEFAULT_MAX_PARALLEL_RUNS } from "./parallel-limit.ts";
+import { isFinished, type RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
 export const MAX_NICKNAME_LENGTH = 40;
 export const PAUSED_MESSAGE = "The Console is paused: the game has reached its spending cap. The host can raise it to continue.";
-
-/**
- * How many Runs may be in progress at once unless the host sets
- * `MAX_PARALLEL_RUNS`. Prompts beyond the limit wait in the queue.
- */
-export const DEFAULT_MAX_PARALLEL_RUNS = 3;
-
-/** Reads the parallel Run limit from `MAX_PARALLEL_RUNS`, a whole number of at least 1. */
-export function maxParallelRunsFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
-  const value = env.MAX_PARALLEL_RUNS;
-  if (value === undefined || value === "") return DEFAULT_MAX_PARALLEL_RUNS;
-  const limit = Number(value);
-  if (!Number.isInteger(limit) || limit < 1) throw new Error(`MAX_PARALLEL_RUNS must be a whole number of at least 1, not "${value}"`);
-  return limit;
-}
 
 /**
  * `waiting → running → landing → landed`. If Landing conflicts or fails the
@@ -45,7 +30,7 @@ export interface RunView {
   model: Model;
   /** What kind of change the Run makes; a Player's own Prompt if absent. */
   kind?: ChangeKind;
-  /** The earlier change a Replay re-applies or a Rollback undoes; `prompt` is that change's Prompt. */
+  /** The earlier change a Replay re-applies or a Rollback rolls back; `prompt` is that change's Prompt. */
   original?: OriginalChange;
   /** Why the Run was rejected. */
   error?: string;
@@ -77,10 +62,11 @@ export interface RunsSnapshot {
 
 const MAX_PROGRESS_EVENTS = 50;
 /**
- * While the spending cap holds the queue, how often to check whether the host
- * raised it. `raise-cap` only writes a file, so nothing tells the platform.
+ * While Prompts are waiting, how often to check whether the host raised the
+ * spending cap or the parallel Run limit. The host's commands only write
+ * files, so nothing tells the platform.
  */
-const PAUSED_RECHECK_MS = 500;
+const WAITING_RECHECK_MS = 500;
 const MAX_RECENT_RUNS = 20;
 
 export interface PromptRequest {
@@ -89,7 +75,7 @@ export interface PromptRequest {
   model?: unknown;
 }
 
-/** Undo the change that Landed as `commit`, keeping what Landed after it. */
+/** Roll back the change that Landed as `commit`, keeping what Landed after it. */
 export interface RollbackRequest {
   nickname: unknown;
   commit: unknown;
@@ -102,13 +88,13 @@ export interface ReplayRequest {
   model?: unknown;
 }
 
-export class PromptRefused extends Error {
+export class ChangeRefused extends Error {
   /**
    * `invalid`: the request breaks a rule. `already-waiting`: the Player already has a Prompt in the queue.
    * `paused`: the spending cap is reached. `not-found`: no such change in the history.
    */
   readonly reason: "invalid" | "already-waiting" | "paused" | "not-found";
-  constructor(reason: PromptRefused["reason"], message: string) {
+  constructor(reason: ChangeRefused["reason"], message: string) {
     super(message);
     this.reason = reason;
   }
@@ -128,78 +114,75 @@ export class Runs {
   private readonly budget: Budget;
   private readonly store: RunStore;
   private readonly worktreesDir: string;
-  private readonly maxParallelRuns: number;
+  /** The parallel Run limit in force, read each time waiting Prompts might start. */
+  private readonly maxParallelRuns: () => number;
   private readonly runs = new Map<string, RunView>();
   private readonly queue: RunView[] = [];
+  /**
+   * Runs that were in progress when the platform last stopped, oldest first.
+   * They start before waiting Prompts, within the limit but whatever the
+   * spending cap: they were already let in.
+   */
+  private readonly resuming: RunView[] = [];
   /** Runs that have left the queue, oldest first, capped at `MAX_RECENT_RUNS` finished ones. */
   private readonly recent: RunView[] = [];
   private readonly listeners = new Set<(event: RunsEvent) => void>();
   private closed = false;
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
-  /** Set while waiting Prompts are held by the spending cap. */
-  private pausedRecheck: NodeJS.Timeout | undefined;
+  /** Set while Prompts are waiting, to start them if the host raises the cap or the limit. */
+  private waitingRecheck: NodeJS.Timeout | undefined;
 
-  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; store: RunStore; worktreesDir: string; maxParallelRuns?: number }) {
+  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; store: RunStore; worktreesDir: string; maxParallelRuns?: number | (() => number) }) {
     this.repo = options.repo;
     this.agent = options.agent;
     this.lander = options.lander;
     this.budget = options.budget;
     this.store = options.store;
     this.worktreesDir = options.worktreesDir;
-    this.maxParallelRuns = options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS;
+    const limit = options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS;
+    this.maxParallelRuns = typeof limit === "number" ? () => limit : limit;
   }
 
-  /** Validates a Prompt and queues its Run, or throws `PromptRefused`. Each Player (nickname) may have one Prompt waiting. */
+  /** Validates a Prompt and queues its Run, or throws `ChangeRefused`. Each Player (nickname) may have one Prompt waiting. */
   start(request: PromptRequest): RunView {
-    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
     return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, progress: [] });
   }
 
   /**
-   * Queues a Replay of a change in the history, or throws `PromptRefused`. It
+   * Queues a Replay of a change in the history, or throws `ChangeRefused`. It
    * follows the same rules as a Prompt, including the one waiting slot.
    */
-  async replay(request: ReplayRequest): Promise<RunView> {
-    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+  replay(request: ReplayRequest): Promise<RunView> {
+    return this.enqueueAbout("Replay", request);
+  }
+
+  /**
+   * Queues a Rollback of a change in the history, or throws `ChangeRefused`.
+   * It follows the same rules as a Prompt, including the one waiting slot.
+   */
+  rollback(request: RollbackRequest): Promise<RunView> {
+    return this.enqueueAbout("Rollback", request);
+  }
+
+  /** Queues a Run of `kind` about the change that Landed as `request.commit`, with that change's Prompt. */
+  private async enqueueAbout(kind: "Replay" | "Rollback", request: { nickname: unknown; commit: unknown; model?: unknown }): Promise<RunView> {
+    if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     const nickname = validNickname(request.nickname);
-    if (nickname === undefined) throw new PromptRefused("invalid", "Pick a nickname first");
-    const model = validModel(request.model);
+    if (nickname === undefined) throw new ChangeRefused("invalid", "Pick a nickname first");
+    const model = rulesFor({ kind }).playerPicksModel ? validModel(request.model) : DEFAULT_MODEL;
     const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
-    if (original === undefined) throw new PromptRefused("not-found", "There's no such change in the history");
+    if (original === undefined) throw new ChangeRefused("not-found", "There's no such change in the history");
     // Checked again: the cap may have been reached while the history was read.
-    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     return this.enqueue({
       id: randomUUID(),
       state: "waiting",
       nickname,
       prompt: original.prompt,
       model,
-      kind: "Replay",
-      original: { commit: original.commit, nickname: original.nickname },
-      progress: [],
-    });
-  }
-
-  /**
-   * Queues a Rollback of a change in the history, or throws `PromptRefused`.
-   * It follows the same rules as a Prompt, including the one waiting slot.
-   */
-  async rollback(request: RollbackRequest): Promise<RunView> {
-    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
-    const nickname = validNickname(request.nickname);
-    if (nickname === undefined) throw new PromptRefused("invalid", "Pick a nickname first");
-    const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
-    if (original === undefined) throw new PromptRefused("not-found", "There's no such change in the history");
-    // Checked again: the cap may have been reached while the history was read.
-    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
-    return this.enqueue({
-      id: randomUUID(),
-      state: "waiting",
-      nickname,
-      prompt: original.prompt,
-      model: DEFAULT_MODEL,
-      kind: "Rollback",
+      kind,
       original: { commit: original.commit, nickname: original.nickname },
       progress: [],
     });
@@ -208,7 +191,7 @@ export class Runs {
   /** Queues a new Run, unless its Player already has one waiting. */
   private enqueue(run: RunView): RunView {
     if (this.queue.some((waiting) => waiting.nickname === run.nickname)) {
-      throw new PromptRefused("already-waiting", "You already have a Prompt waiting; you can send another once it starts running");
+      throw new ChangeRefused("already-waiting", "You already have a Prompt waiting; you can send another once it starts running");
     }
     this.runs.set(run.id, run);
     this.queue.push(run);
@@ -223,8 +206,9 @@ export class Runs {
   /**
    * Picks up the saved queue and Runs after a restart. Leftover worktrees are
    * removed; Runs that were in progress start again from scratch on the latest
-   * `main` (they were already let in, so they don't wait for a slot or the
-   * spending cap); waiting Prompts are queued again in the same order.
+   * `main`, ahead of the queue (they were already let in, so they wait for a
+   * slot but not for the spending cap); waiting Prompts are queued again in
+   * the same order.
    */
   async resume(): Promise<void> {
     await this.removeLeftoverWorktrees();
@@ -233,13 +217,26 @@ export class Runs {
       this.runs.set(run.id, run);
       this.recent.push(run);
     }
-    for (const saved of this.store.unfinished()) {
+    const unfinished = this.store.unfinished();
+    // A Run can have Landed just before the platform stopped, without being saved as Landed.
+    const landed = unfinished.some((run) => run.state !== "waiting") ? await this.landedRuns() : new Map<string, string>();
+    for (const saved of unfinished) {
       const run: RunView = { ...saved, progress: [] };
       this.runs.set(run.id, run);
-      if (run.state === "waiting") this.queue.push(run);
-      else this.startRun(run);
+      const commit = landed.get(run.id);
+      if (commit !== undefined) {
+        run.commit = commit;
+        this.recent.push(run);
+        this.setState(run, "landed");
+      } else if (run.state === "waiting") this.queue.push(run);
+      else this.resuming.push(run);
     }
     this.startWaitingRuns();
+  }
+
+  /** The commit each Run Landed as, by Run id, from the `Run` trailers on `main`. */
+  private async landedRuns(): Promise<Map<string, string>> {
+    return new Map((await this.repo.history()).flatMap((change) => (change.run ? [[change.run, change.commit] as const] : [])));
   }
 
   get(id: string): RunView | undefined {
@@ -272,8 +269,9 @@ export class Runs {
   /** Drops the queue, aborts Runs in progress and waits for them to clean up. */
   async close(): Promise<void> {
     this.closed = true;
-    clearTimeout(this.pausedRecheck);
+    clearTimeout(this.waitingRecheck);
     this.queue.length = 0;
+    this.resuming.length = 0;
     const all = [...this.inProgress.values()];
     for (const { abort } of all) abort.abort();
     await Promise.all(all.map(({ done }) => done));
@@ -282,24 +280,26 @@ export class Runs {
   /**
    * Starts waiting Prompts, oldest first, while slots are free. While the
    * spending cap pauses the Console they stay waiting, and start once the
-   * host raises the cap.
+   * host raises the cap. Lowering the limit never stops Runs in progress.
    */
   private startWaitingRuns(): void {
-    if (this.closed || this.queue.length === 0 || this.pausedRecheck !== undefined) return;
-    if (this.budget.spending().paused) {
-      this.pausedRecheck = setTimeout(() => {
-        this.pausedRecheck = undefined;
-        this.startWaitingRuns();
-      }, PAUSED_RECHECK_MS);
-      this.pausedRecheck.unref();
-      return;
-    }
+    clearTimeout(this.waitingRecheck);
+    this.waitingRecheck = undefined;
+    if (this.closed || this.queue.length + this.resuming.length === 0) return;
+    const limit = this.maxParallelRuns();
+    while (this.inProgress.size < limit && this.resuming.length > 0) this.startRun(this.resuming.shift()!);
     let started = false;
-    while (!this.closed && this.inProgress.size < this.maxParallelRuns && this.queue.length > 0) {
-      started = true;
-      this.startRun(this.queue.shift()!);
+    if (!this.budget.spending().paused) {
+      while (this.inProgress.size < limit && this.queue.length > 0) {
+        started = true;
+        this.startRun(this.queue.shift()!);
+      }
     }
     if (started) this.publishQueue();
+    if (this.queue.length + this.resuming.length > 0) {
+      this.waitingRecheck = setTimeout(() => this.startWaitingRuns(), WAITING_RECHECK_MS);
+      this.waitingRecheck.unref();
+    }
   }
 
   private startRun(run: RunView): void {
@@ -339,10 +339,10 @@ export class Runs {
 
   /** Drops the oldest finished Runs beyond `MAX_RECENT_RUNS`. */
   private forgetOldRuns(): void {
-    let finished = this.recent.filter((run) => run.state === "landed" || run.state === "rejected").length;
+    let finished = this.recent.filter((run) => isFinished(run.state)).length;
     for (let i = 0; i < this.recent.length && finished > MAX_RECENT_RUNS; ) {
       const run = this.recent[i];
-      if (run.state === "landed" || run.state === "rejected") {
+      if (isFinished(run.state)) {
         this.recent.splice(i, 1);
         finished--;
       } else i++;
@@ -397,17 +397,21 @@ export class Runs {
   }
 
   /**
-   * Lets the Agent do the Run's work in the worktree, then Lands it. A
-   * Rollback is first tried as a mechanical revert, and only needs the Agent
-   * if that conflicts.
+   * Lets the Agent do the Run's work in the worktree, then Lands it. Some
+   * kinds of change (a Rollback) are first tried mechanically, and only need
+   * the Agent if that fails.
    */
   private async workOnce(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
-    if (!(run.kind === "Rollback" && run.original && (await this.repo.revert(worktree, run.original.commit)))) {
-      const failure = await this.runAgent(run, worktree, signal, await this.instructions(run, worktree), run.model);
+    const rules = rulesFor(run);
+    const mechanical = rules.mechanically !== undefined && (await rules.mechanically(this.repo, worktree, run));
+    if (!mechanical) {
+      const failure = await this.runAgent(run, worktree, signal, await rules.instructions(this.repo, worktree, run), run.model);
       if (failure !== undefined) return { landed: false, reason: failure };
     }
     this.setState(run, "landing");
-    return this.lander.land(worktree, this.change(run));
+    const result = await this.lander.land(worktree, this.change(run));
+    if (mechanical && !result.landed && result.failure === "unchanged" && rules.nothingToDo) return { ...result, reason: rules.nothingToDo };
+    return result;
   }
 
   /** `workOnce`, then up to `MAX_RESOLUTION_ATTEMPTS` resolutions if the change conflicts or doesn't render. */
@@ -443,30 +447,13 @@ export class Runs {
       problem = { kind: "render", problem: failed.problem ?? "unknown" };
     }
     const collided = await this.repo.changesBetween(worktree.base, onto, problem.kind === "conflict" ? conflicts : undefined);
-    const instructions = resolutionInstructions({ prompt: this.intent(run), problem, collided });
+    const instructions = resolutionInstructions({ prompt: rulesFor(run).intent(run), problem, collided });
     if ((await this.runAgent(run, worktree, signal, instructions, RESOLUTION_MODEL)) !== undefined) return false;
     return !(await hasConflictMarkers(worktree.dir, conflicts));
   }
 
-  /**
-   * What the Agent is asked to do: the Prompt itself, or for a Replay or a
-   * Rollback, the original change and the Prompts that Landed since, as of the worktree's base.
-   */
-  private async instructions(run: RunView, worktree: Worktree): Promise<string> {
-    if ((run.kind !== "Replay" && run.kind !== "Rollback") || !run.original) return run.prompt;
-    const original = await this.repo.landedChange(run.original.commit);
-    if (!original) throw new Error(`The original change ${run.original.commit} is no longer in the history`);
-    const [diff, since] = await Promise.all([this.repo.diff(original.commit), this.repo.changesBetween(original.commit, worktree.base)]);
-    return run.kind === "Replay" ? replayInstructions({ original, diff, since }) : rollbackInstructions({ original, diff, since });
-  }
-
-  /** What the Run is for, in words the resolving Agent can act on. */
-  private intent(run: RunView): string {
-    return run.kind === "Rollback" && run.original ? rollbackIntent({ ...run.original, prompt: run.prompt }) : run.prompt;
-  }
-
   private change(run: RunView): ChangeMetadata {
-    const change: ChangeMetadata = { kind: run.kind ?? "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model };
+    const change: ChangeMetadata = { kind: run.kind ?? "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model, run: run.id };
     if (run.original) change.original = run.original;
     return change;
   }
@@ -499,17 +486,17 @@ function copy(run: RunView): RunView {
 
 function validate(request: PromptRequest): { nickname: string; prompt: string; model: Model } {
   const nickname = validNickname(request.nickname);
-  if (nickname === undefined) throw new PromptRefused("invalid", "Pick a nickname first");
-  if (typeof request.prompt !== "string" || request.prompt.trim() === "") throw new PromptRefused("invalid", "The Prompt is empty");
+  if (nickname === undefined) throw new ChangeRefused("invalid", "Pick a nickname first");
+  if (typeof request.prompt !== "string" || request.prompt.trim() === "") throw new ChangeRefused("invalid", "The Prompt is empty");
   if (request.prompt.length > MAX_PROMPT_LENGTH) {
-    throw new PromptRefused("invalid", `Prompts are limited to ${MAX_PROMPT_LENGTH} characters`);
+    throw new ChangeRefused("invalid", `Prompts are limited to ${MAX_PROMPT_LENGTH} characters`);
   }
   return { nickname, prompt: request.prompt.trim(), model: validModel(request.model) };
 }
 
 function validModel(value: unknown): Model {
   const model = value ?? DEFAULT_MODEL;
-  if (!MODELS.includes(model as Model)) throw new PromptRefused("invalid", `The model must be one of ${MODELS.join(", ")}`);
+  if (!MODELS.includes(model as Model)) throw new ChangeRefused("invalid", `The model must be one of ${MODELS.join(", ")}`);
   return model as Model;
 }
 

@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { isCrossOrigin, readJson, sendJson } from "./http.ts";
-import { PromptRefused, type Runs } from "./runs.ts";
+import { ChangeRefused, type Runs, type RunView } from "./runs.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
-const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503, "not-found": 404 };
+const REFUSAL_STATUS: Record<ChangeRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503, "not-found": 404 };
 
 /**
  * Serves the Console UI and the Console API, including `/api/live`: a
@@ -31,37 +31,13 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
         return sendJson(res, 200, { ok: true });
       }
       if (url.pathname === "/api/prompts" && req.method === "POST") {
-        const body = await readJson(req);
-        if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
-        try {
-          const run = runs.start({ nickname: cookie(req, "nickname"), prompt: body.prompt, model: body.model });
-          return sendJson(res, 202, run);
-        } catch (error) {
-          if (!(error instanceof PromptRefused)) throw error;
-          return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
-        }
+        return await queueChange(req, res, (body, nickname) => runs.start({ nickname, prompt: body.prompt, model: body.model }));
       }
       if (url.pathname === "/api/replays" && req.method === "POST") {
-        const body = await readJson(req);
-        if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
-        try {
-          const run = await runs.replay({ nickname: cookie(req, "nickname"), commit: body.commit, model: body.model });
-          return sendJson(res, 202, run);
-        } catch (error) {
-          if (!(error instanceof PromptRefused)) throw error;
-          return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
-        }
+        return await queueChange(req, res, (body, nickname) => runs.replay({ nickname, commit: body.commit, model: body.model }));
       }
       if (url.pathname === "/api/rollbacks" && req.method === "POST") {
-        const body = await readJson(req);
-        if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
-        try {
-          const run = await runs.rollback({ nickname: cookie(req, "nickname"), commit: body.commit });
-          return sendJson(res, 202, run);
-        } catch (error) {
-          if (!(error instanceof PromptRefused)) throw error;
-          return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
-        }
+        return await queueChange(req, res, (body, nickname) => runs.rollback({ nickname, commit: body.commit }));
       }
       const runMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
       if (runMatch && req.method === "GET") {
@@ -96,6 +72,26 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
     return closeServer(callback);
   };
   return server;
+}
+
+/**
+ * Handles a POST that queues a Run: reads the JSON body and the Player's
+ * nickname cookie, then answers 202 with the Run, or the status for why it
+ * was refused.
+ */
+async function queueChange(
+  req: IncomingMessage,
+  res: ServerResponse,
+  queue: (body: Record<string, unknown>, nickname: string | undefined) => RunView | Promise<RunView>,
+): Promise<void> {
+  const body = await readJson(req);
+  if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
+  try {
+    return sendJson(res, 202, await queue(body, cookie(req, "nickname")));
+  } catch (error) {
+    if (!(error instanceof ChangeRefused)) throw error;
+    return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
+  }
 }
 
 function followRuns(client: WebSocket, runs: Runs): void {

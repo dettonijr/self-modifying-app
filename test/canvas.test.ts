@@ -75,10 +75,26 @@ describe("Canvas server", () => {
     expect((await platform.fetchCanvas("/..%2F..%2Fetc%2Fpasswd")).status).toBe(404);
     expect((await platform.fetchCanvas("/.git/HEAD")).status).toBe(404);
   });
+
+  it("serves only commits on main, never ones that didn't Land", async () => {
+    const platform = await start();
+    const main = git(platform.canvasRepoDir, ["rev-parse", "main"]);
+    // A commit in the object store that isn't on main, as a rejected Run leaves behind.
+    const tree = git(platform.canvasRepoDir, ["rev-parse", "main^{tree}"]);
+    const unlanded = git(platform.canvasRepoDir, ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit-tree", tree, "-p", main, "-m", "rejected"]);
+
+    expect((await platform.fetchCanvas(`/@${main}/`)).status).toBe(200);
+    expect((await platform.fetchCanvas(`/@${unlanded}/`)).status).toBe(404);
+    expect((await platform.fetchCanvas(`/@${unlanded}/features/hello/hello.js`)).status).toBe(404);
+  });
 });
 
 /** Stands in for a Land until the Lander exists. */
 function commitAll(repoDir: string, message: string) {
   execFileSync("git", ["add", "--all"], { cwd: repoDir });
   execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", message], { cwd: repoDir });
+}
+
+function git(repoDir: string, args: string[]): string {
+  return execFileSync("git", args, { cwd: repoDir, encoding: "utf8" }).trim();
 }

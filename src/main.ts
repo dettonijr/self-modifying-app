@@ -1,7 +1,7 @@
 import { agentFromEnvironment } from "./claude-agent.ts";
 import { configuredCapUsd } from "./budget.ts";
 import { startPlatform } from "./platform.ts";
-import { maxParallelRunsFromEnvironment } from "./runs.ts";
+import { maxParallelRunsFromEnvironment } from "./parallel-limit.ts";
 
 const platform = await startPlatform({
   dataDir: process.env.DATA_DIR ?? "./data",

@@ -215,10 +215,10 @@
       );
     }
 
-    // The history entry whose "Fix it to this!" confirmation is open, kept across refreshes.
-    let confirmingReplay;
-    // The same for a Rollback's confirmation.
-    let confirmingRollback;
+    // The open confirmation, kept across refreshes: the history entry's commit and whether it's a "replay" or a "rollback".
+    let confirming;
+    // Whether the spending cap pauses the Console; Send, "Fix it to this!" and "Roll back" are disabled while it does.
+    let paused = false;
 
     async function refreshHistory() {
       const response = await fetch("/api/history");
@@ -252,22 +252,24 @@
           const fix = document.createElement("button");
           fix.type = "button";
           fix.textContent = "Fix it to this!";
+          fix.disabled = paused;
           fix.addEventListener("click", () => {
-            confirmingRollback = undefined;
-            confirmingReplay = change.commit;
+            confirming = { commit: change.commit, action: "replay" };
             showReplayConfirmation(change, actions);
           });
           const rollback = document.createElement("button");
           rollback.type = "button";
           rollback.textContent = "Roll back";
+          rollback.disabled = paused;
           rollback.addEventListener("click", () => {
-            confirmingReplay = undefined;
-            confirmingRollback = change.commit;
+            confirming = { commit: change.commit, action: "rollback" };
             showRollbackConfirmation(change, actions);
           });
           actions.append(fix, rollback);
-          if (confirmingReplay === change.commit) showReplayConfirmation(change, actions);
-          if (confirmingRollback === change.commit) showRollbackConfirmation(change, actions);
+          if (confirming?.commit === change.commit) {
+            if (confirming.action === "replay") showReplayConfirmation(change, actions);
+            else showRollbackConfirmation(change, actions);
+          }
           item.append(actions);
           return item;
         }),
@@ -288,11 +290,13 @@
       const go = document.createElement("button");
       go.type = "button";
       go.textContent = "Replay";
+      go.className = "go";
+      go.disabled = paused;
       const cancel = document.createElement("button");
       cancel.type = "button";
       cancel.textContent = "Cancel";
       const close = () => {
-        confirmingReplay = undefined;
+        confirming = undefined;
         confirm.remove();
       };
       cancel.addEventListener("click", close);
@@ -322,11 +326,13 @@
       const go = document.createElement("button");
       go.type = "button";
       go.textContent = "Yes, roll back";
+      go.className = "go";
+      go.disabled = paused;
       const cancel = document.createElement("button");
       cancel.type = "button";
       cancel.textContent = "Keep it";
       const close = () => {
-        confirmingRollback = undefined;
+        confirming = undefined;
         confirm.remove();
       };
       cancel.addEventListener("click", close);
@@ -352,10 +358,12 @@
     async function refreshSpending() {
       const response = await fetch("/api/spending");
       if (!response.ok) return;
-      const { totalUsd, capUsd, paused } = await response.json();
-      $("spending").textContent = `${usd(totalUsd)} of ${usd(capUsd)}`;
+      const spending = await response.json();
+      paused = spending.paused;
+      $("spending").textContent = `${usd(spending.totalUsd)} of ${usd(spending.capUsd)}`;
       $("paused").hidden = !paused;
       document.querySelector("#prompt-form button[type=submit]").disabled = paused;
+      for (const button of document.querySelectorAll("#history .actions > button, #history .confirm .go")) button.disabled = paused;
     }
 
     showPlayer();

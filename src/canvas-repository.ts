@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { Model } from "./agent.ts";
 import { git, gitBytes, GitError } from "./git.ts";
 
-/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again ("Fix it to this!"). `Rollback`: an earlier change undone. */
+/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again ("Fix it to this!"). `Rollback`: an earlier change rolled back. */
 export const CHANGE_KINDS = ["Prompt", "Replay", "Rollback"] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 
@@ -15,8 +15,10 @@ export interface ChangeMetadata {
   nickname: string;
   prompt: string;
   model: Model;
-  /** The change a Replay re-applies or a Rollback undoes, and who made it. */
+  /** The change a Replay re-applies or a Rollback rolls back, and who made it. */
   original?: OriginalChange;
+  /** The id of the Run that made the change, kept as a `Run` trailer so a restart can tell it already Landed. */
+  run?: string;
 }
 
 /** A reference to an earlier change on `main`, kept as `Original` and `Original-Nickname` trailers. */
@@ -171,15 +173,21 @@ export class CanvasRepository {
     return (await this.changes([`${from}..${to}`, ...(paths ? ["--", ...paths] : [])])).reverse();
   }
 
-  /** The change that Landed as `commit`, if it's on `main`. */
-  async landedChange(commit: string): Promise<LandedChange | undefined> {
-    if (!/^[0-9a-f]{40}$/.test(commit)) return undefined;
+  /** Whether `commit`, a full 40-character hash, is on `main` (the Starter Canvas included). */
+  async isOnMain(commit: string): Promise<boolean> {
+    if (!/^[0-9a-f]{40}$/.test(commit)) return false;
     try {
       await git(this.dir, ["merge-base", "--is-ancestor", commit, "main"]);
+      return true;
     } catch (error) {
-      if (error instanceof GitError) return undefined;
+      if (error instanceof GitError) return false;
       throw error;
     }
+  }
+
+  /** The change that Landed as `commit`, if it's on `main`. */
+  async landedChange(commit: string): Promise<LandedChange | undefined> {
+    if (!(await this.isOnMain(commit))) return undefined;
     return (await this.changes(["-1", commit]))[0];
   }
 
@@ -206,12 +214,12 @@ export class CanvasRepository {
 
   /** The changes `git log <args>` lists, newest first. */
   private async changes(args: string[]): Promise<LandedChange[]> {
-    const trailers = ["Kind", "Nickname", "Model", "Original", "Original-Nickname"].map((key) => `%(trailers:key=${key},valueonly)`);
+    const trailers = ["Kind", "Nickname", "Model", "Original", "Original-Nickname", "Run"].map((key) => `%(trailers:key=${key},valueonly)`);
     const fields = ["%H", "%cI", ...trailers, "%B"];
     const log = await git(this.dir, ["log", `--format=${fields.join("%x1f")}%x1e`, ...args]);
     const changes: LandedChange[] = [];
     for (const entry of log.split("\x1e")) {
-      const [commit, time, kind, nickname, model, original, originalNickname, message] = entry.trim().split("\x1f");
+      const [commit, time, kind, nickname, model, original, originalNickname, run, message] = entry.trim().split("\x1f");
       if (!commit || !CHANGE_KINDS.includes(kind?.trim() as ChangeKind)) continue;
       const change: LandedChange = {
         commit,
@@ -222,6 +230,7 @@ export class CanvasRepository {
         prompt: promptFromMessage(message),
       };
       if (original.trim() !== "") change.original = { commit: original.trim(), nickname: originalNickname.trim() };
+      if (run.trim() !== "") change.run = run.trim();
       changes.push(change);
     }
     return changes;
@@ -253,6 +262,7 @@ function commitMessage(change: ChangeMetadata): string {
       `Nickname: ${change.nickname}`,
       `Model: ${change.model}`,
       ...(change.original ? [`Original: ${change.original.commit}`, `Original-Nickname: ${change.original.nickname}`] : []),
+      ...(change.run ? [`Run: ${change.run}`] : []),
     ].join("\n"),
   ].join("\n\n") + "\n";
 }

@@ -1,7 +1,5 @@
 import type { LandedChange } from "./canvas-repository.ts";
-
-/** Longer diffs are cut to this many characters; they're only a reference. */
-export const MAX_REPLAY_DIFF_LENGTH = 40_000;
+import { promptList, shownDiff } from "./change-context.ts";
 
 /**
  * What the Agent is asked for a Replay: make the Canvas fulfil the original
@@ -10,11 +8,6 @@ export const MAX_REPLAY_DIFF_LENGTH = 40_000;
  */
 export function replayInstructions(options: { original: LandedChange; diff: string; since: LandedChange[] }): string {
   const { original, diff, since } = options;
-  const shownDiff = diff.length > MAX_REPLAY_DIFF_LENGTH ? `${diff.slice(0, MAX_REPLAY_DIFF_LENGTH)}\n… (diff cut short)` : diff;
-  const later =
-    since.length === 0
-      ? ["No other changes have Landed since."]
-      : ["The Prompts that Landed since, oldest first:", ...since.map((change) => `- ${change.nickname}: ${change.prompt}`)];
   return [
     "This is a Replay: a Player wants an earlier Prompt to work again on the current Canvas.",
     "",
@@ -23,10 +16,10 @@ export function replayInstructions(options: { original: LandedChange; diff: stri
     "",
     "The diff of the original change, for reference only. The Canvas has changed since, so don't apply it blindly:",
     "```diff",
-    shownDiff,
+    shownDiff(diff),
     "```",
     "",
-    ...later,
+    ...promptList(since, { heading: "The Prompts that Landed since, oldest first:", none: "No other changes have Landed since." }),
     "",
     "Make the Canvas fulfil the original Prompt again. Where a later change altered or undid this specific subject, this Replay wins over it.",
     "Keep everything unrelated that Landed since; don't undo other changes.",

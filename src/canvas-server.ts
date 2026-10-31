@@ -18,10 +18,19 @@ const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
  * Serves the Canvas from git. A page's live URL redirects to the same page at
  * the commit `main` points to, `/@<commit>/…`, so everything the page loads by
  * relative URL comes from that one commit: never a mix of versions, and never
- * stale, because a new commit means new URLs.
+ * stale, because a new commit means new URLs. Only commits on `main` are
+ * served, unless `anyCommit` is set, as for the render check's candidates.
  */
-export function createCanvasServer(options: { repo: CanvasRepository; channel: CanvasChannel; store: KeyValueStore }): Server {
+export function createCanvasServer(options: { repo: CanvasRepository; channel: CanvasChannel; store: KeyValueStore; anyCommit?: boolean }): Server {
   const { repo, channel, store } = options;
+  // `main` only ever moves forward, so a commit on it stays on it.
+  const onMain = new Set<string>();
+  const servable = async (commit: string): Promise<boolean> => {
+    if (options.anyCommit || onMain.has(commit)) return true;
+    if (!(await repo.isOnMain(commit))) return false;
+    onMain.add(commit);
+    return true;
+  };
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://canvas");
@@ -49,6 +58,10 @@ export function createCanvasServer(options: { repo: CanvasRepository; channel: C
         return;
       }
       const commit = pinned ? pinned[1] : await repo.main();
+      if (pinned && !(await servable(commit))) {
+        res.writeHead(404).end("Not found");
+        return;
+      }
       const file = await findFile(repo, commit, filePath);
       if (file === undefined) {
         res.writeHead(404).end("Not found");
