@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
-import type { Budget } from "./budget.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { changedFilesOf } from "./changed-files.ts";
 import { isCrossOrigin, readJson, sendJson } from "./http.ts";
@@ -15,14 +14,14 @@ const STYLESHEETS: Record<string, string> = {
   "/palette.css": readFileSync(new URL("./palette.css", import.meta.url), "utf8"),
   "/console.css": readFileSync(new URL("./console.css", import.meta.url), "utf8"),
 };
-const REFUSAL_STATUS: Record<ChangeRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503, "not-found": 404 };
+const REFUSAL_STATUS: Record<ChangeRefused["reason"], number> = { invalid: 400, "already-waiting": 409, "not-found": 404 };
 
 /**
  * Serves the Console UI and the Console API, including `/api/live`: a
  * WebSocket that sends a `snapshot` on connecting, then every `RunsEvent`.
  */
-export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository; budget: Budget; canvasPort: () => number }): Server {
-  const { runs, repo, budget, canvasPort } = options;
+export function createConsoleServer(options: { runs: Runs; repo: CanvasRepository; canvasPort: () => number }): Server {
+  const { runs, repo, canvasPort } = options;
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://console");
@@ -83,9 +82,6 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       if (url.pathname === "/api/canvas" && req.method === "GET") {
         // The Canvas is on the same host as the Console, on its own port (docs/adr/0004).
         return sendJson(res, 200, { port: canvasPort() });
-      }
-      if (url.pathname === "/api/spending" && req.method === "GET") {
-        return sendJson(res, 200, budget.spending());
       }
       if (url.pathname === "/api/history" && req.method === "GET") {
         return sendJson(res, 200, await repo.history());

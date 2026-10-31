@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { Agent } from "./agent.ts";
-import { Budget } from "./budget.ts";
 import { CanvasChannel } from "./canvas-channel.ts";
 import { CanvasRepository } from "./canvas-repository.ts";
 import { createCanvasServer } from "./canvas-server.ts";
@@ -28,8 +27,6 @@ export interface PlatformOptions {
    * it on another port.
    */
   canvasPublicPort?: number;
-  /** Spending cap in US dollars; `DEFAULT_SPENDING_CAP_USD` if omitted. */
-  spendingCapUsd?: number;
   /** How many Runs may be in progress at once to start with; `DEFAULT_MAX_PARALLEL_RUNS` if omitted. The host can change it with `set-parallel-runs`. */
   maxParallelRuns?: number;
 }
@@ -45,21 +42,19 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
   const host = options.host ?? "0.0.0.0";
   const repo = await CanvasRepository.open(path.join(options.dataDir, "canvas"));
 
-  const budget = new Budget({ dataDir: options.dataDir, capUsd: options.spendingCapUsd });
   const renderCheck = new RenderCheck(repo);
   const runStore = new RunStore(path.join(options.dataDir, "runs.sqlite"));
   const runs = new Runs({
     repo,
     agent: options.agent,
     lander: new Lander(repo, renderCheck),
-    budget,
     store: runStore,
     worktreesDir: path.join(options.dataDir, "worktrees"),
     maxParallelRuns: () => currentMaxParallelRuns(options.dataDir, options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS),
   });
 
   let canvasPort = 0;
-  const consoleServer = createConsoleServer({ runs, repo, budget, canvasPort: () => options.canvasPublicPort ?? canvasPort });
+  const consoleServer = createConsoleServer({ runs, repo, canvasPort: () => options.canvasPublicPort ?? canvasPort });
   const channel = new CanvasChannel({
     greeting: async () => ({
       type: "hello",

@@ -136,16 +136,6 @@ button:disabled {
 .confirm.rollback { border-color: var(--color-danger); border-left-width: 6px; }
 .confirm select { flex: 1 1 10rem; }
 
-.paused {
-  margin: 1rem 0;
-  padding: 0.85rem 1rem;
-  border-radius: 12px;
-  border: 1px solid var(--color-warning);
-  border-left-width: 6px;
-  background: var(--color-surface);
-  color: var(--color-text);
-}
-
 #status:empty { display: none; }
 #status { margin: 0.75rem 0 0; color: var(--color-text-muted); }
 #status.error { color: var(--color-danger); }

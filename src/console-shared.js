@@ -44,35 +44,6 @@ export function connectLive(onMessage) {
   socket.addEventListener("close", () => setTimeout(() => connectLive(onMessage), 1000));
 }
 
-// Whether the spending cap pauses the Console; Send, Replay and Roll back are disabled while it does.
-let paused = false;
-
-/** Marks a button as one the spending pause disables. */
-export function pausable(element) {
-  element.dataset.pausable = "";
-  element.disabled = paused;
-  return element;
-}
-
-/**
- * Keeps the pause up to date: polls `/api/spending` every 2 seconds, disables
- * every pausable button while paused and calls `onSpending` with each answer.
- * Returns a function that refreshes it now.
- */
-export function followSpending(onSpending) {
-  async function refresh() {
-    const response = await fetch("/api/spending");
-    if (!response.ok) return;
-    const spending = await response.json();
-    paused = spending.paused;
-    for (const element of document.querySelectorAll("[data-pausable]")) element.disabled = paused;
-    onSpending(spending);
-  }
-  void refresh();
-  setInterval(refresh, 2000);
-  return refresh;
-}
-
 // The open confirmation, kept across re-renders: the Run's id, whether it's a "replay" or a "rollback", and the picked Replay model.
 let confirming;
 
@@ -84,14 +55,14 @@ let confirming;
 export function actionsFor(run, { defaultModel, onQueued }) {
   const actions = document.createElement("div");
   actions.className = "actions";
-  const replay = pausable(button("Replay", () => {
+  const replay = button("Replay", () => {
     confirming = { id: run.id, action: "replay", model: defaultModel() };
     showReplayConfirmation(run, actions, onQueued);
-  }, "secondary"));
-  const rollback = pausable(button("Roll back", () => {
+  }, "secondary");
+  const rollback = button("Roll back", () => {
     confirming = { id: run.id, action: "rollback" };
     showRollbackConfirmation(run, actions, onQueued);
-  }, "secondary"));
+  }, "secondary");
   actions.append(replay, rollback);
   if (confirming?.id === run.id) {
     if (confirming.action === "replay") showReplayConfirmation(run, actions, onQueued);
@@ -115,10 +86,10 @@ function showReplayConfirmation(run, actions, onQueued) {
   model.setAttribute("aria-label", "Replay model");
   model.value = confirming.model;
   model.addEventListener("change", () => (confirming.model = model.value));
-  const go = pausable(button("Yes, replay", async () => {
+  const go = button("Yes, replay", async () => {
     closeConfirmation(confirm);
     onQueued(await queueChange("/api/replays", { commit: run.commit, model: model.value }, "Replay", "Claude is working on your Replay…"));
-  }));
+  });
   const cancel = button("Cancel", () => closeConfirmation(confirm), "secondary");
   confirm.append(question, " ", model, " ", go, " ", cancel);
   actions.append(confirm);
@@ -130,10 +101,10 @@ function showRollbackConfirmation(run, actions, onQueued) {
   const confirm = document.createElement("span");
   confirm.className = "confirm rollback";
   const question = span("", `Roll back ${run.nickname}'s change? Everything that Landed after it is kept.`);
-  const go = pausable(button("Yes, roll back", async () => {
+  const go = button("Yes, roll back", async () => {
     closeConfirmation(confirm);
     onQueued(await queueChange("/api/rollbacks", { commit: run.commit }, "Rollback", "Rolling it back…"));
-  }, "danger"));
+  }, "danger");
   const cancel = button("Keep it", () => closeConfirmation(confirm), "secondary");
   confirm.append(question, " ", go, " ", cancel);
   actions.append(confirm);

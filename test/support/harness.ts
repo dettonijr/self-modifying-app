@@ -10,8 +10,6 @@ export interface TestPlatformOptions {
   /** Reuse a data folder, e.g. to restart a platform. Not deleted on close. */
   dataDir?: string;
   agent?: Agent;
-  /** The spending cap in US dollars; the platform's default if omitted. */
-  spendingCapUsd?: number;
   /** The parallel Run limit; the platform's default if omitted. */
   maxParallelRuns?: number;
 }
@@ -68,7 +66,7 @@ export async function startTestPlatform(options: TestPlatformOptions = {}): Prom
   const ownsDataDir = options.dataDir === undefined;
   const dataDir = options.dataDir ?? (await mkdtemp(path.join(os.tmpdir(), "sma-test-")));
   const agent = options.agent ?? new FakeAgent();
-  const platform = await startPlatform({ dataDir, agent, host: "127.0.0.1", spendingCapUsd: options.spendingCapUsd, maxParallelRuns: options.maxParallelRuns });
+  const platform = await startPlatform({ dataDir, agent, host: "127.0.0.1", maxParallelRuns: options.maxParallelRuns });
   const consoleUrl = `http://127.0.0.1:${platform.consolePort}`;
   const canvasUrl = `http://127.0.0.1:${platform.canvasPort}`;
 

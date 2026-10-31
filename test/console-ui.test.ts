@@ -141,41 +141,38 @@ describe("Console UI", () => {
     expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
   });
 
-  it("shows the running cost live to everyone, and the paused state once the spending cap is reached", async () => {
-    const { page, platform, agent } = await open(new FakeAgent(), { spendingCapUsd: 2 });
-    const watcher = await (await browser.newContext()).newPage();
-    await watcher.goto(platform.consoleUrl + "/");
-    for (const p of [page, watcher]) await expect.poll(() => p.getByTestId("spending").textContent()).toContain("$0.00 of $2.00");
-
+  it("shows no spending total and never pauses: Send, Replay and Roll back stay enabled however much is used", async () => {
+    const { page, platform, agent } = await join(await open());
+    const spendingRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/api/spending")) spendingRequests.push(request.url());
+    });
     agent.enqueue(
       async (run) => {
-        run.usage({ inputTokens: 100_000, outputTokens: 100_000 }); // $1.20 on Sonnet 5.5
-        await run.writeFile("index.html", "<h1>one</h1>");
+        run.usage({ inputTokens: 10_000_000, outputTokens: 0 }); // $20 on Sonnet 5.5, twice the old default cap
+        await run.writeFile("features/one/one.js", "one");
       },
       async (run) => {
-        run.usage({ inputTokens: 400_000, outputTokens: 0 }); // $0.80 more: the cap
-        await run.writeFile("index.html", "<h1>two</h1>");
+        run.usage({ inputTokens: 10_000_000, outputTokens: 0 });
+        await run.writeFile("features/two/two.js", "two");
       },
     );
     await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "one" })).id);
-    await expect.poll(() => watcher.getByTestId("spending").textContent(), { timeout: 10_000 }).toContain("$1.20 of $2.00");
-    expect(await watcher.getByTestId("paused").isVisible()).toBe(false);
-
     await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "two" })).id);
-    await expect.poll(() => watcher.getByTestId("paused").isVisible(), { timeout: 10_000 }).toBe(true);
-    expect(await watcher.getByTestId("paused").textContent()).toMatch(/spending cap/i);
-    expect(await watcher.getByTestId("spending").textContent()).toContain("$2.00 of $2.00");
 
-    await join({ page });
-    await page.getByLabel("Prompt").fill("three");
-    await expect.poll(() => page.getByRole("button", { name: "Send" }).isDisabled(), { timeout: 10_000 }).toBe(true);
     const history = page.getByTestId("prompts");
     await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
+    await page.getByLabel("Prompt").fill("three");
+    expect(await page.getByRole("button", { name: "Send" }).isDisabled()).toBe(false);
     for (const name of ["Replay", "Roll back"]) {
       const buttons = history.getByRole("button", { name, exact: true });
       await expect.poll(() => buttons.count()).toBe(2);
-      for (const button of await buttons.all()) await expect.poll(() => button.isDisabled(), { timeout: 10_000 }).toBe(true);
+      for (const button of await buttons.all()) expect(await button.isDisabled()).toBe(false);
     }
+    expect(await page.getByTestId("spending").count()).toBe(0);
+    expect(await page.getByTestId("paused").count()).toBe(0);
+    expect(await page.locator("body").textContent()).not.toMatch(/spent|spending cap|paused/i);
+    expect(spendingRequests).toEqual([]);
   });
 
   it("tells the Player why their Prompt didn't Land when the Canvas didn't render", async () => {

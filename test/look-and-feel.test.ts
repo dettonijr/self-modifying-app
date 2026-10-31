@@ -147,12 +147,9 @@ describe("Look and feel", () => {
     expect(rollback.background).not.toBe(send.background);
     expect(rollback.background).not.toBe(keep.background);
 
-    // Disabled: paused by the spending cap.
-    const paused = await start({ spendingCapUsd: 0 });
-    const pausedPage = await newPage(paused.platform);
-    await pausedPage.goto(paused.platform.consoleUrl + "/");
-    const disabledSend = pausedPage.getByRole("button", { name: "Send" });
-    await expect.poll(() => disabledSend.isDisabled()).toBe(true);
+    // Disabled: nothing in the Console disables Send any more, so disable it here to check the style.
+    const disabledSend = page.getByRole("button", { name: "Send" });
+    await disabledSend.evaluate((button: HTMLButtonElement) => (button.disabled = true));
     const disabled = await disabledSend.evaluate(buttonLook);
     expect(disabled.background).not.toBe(send.background);
     expect(disabled.color).not.toBe(send.color);

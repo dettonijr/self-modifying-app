@@ -7,7 +7,6 @@ services:
     environment:
       # The Canvas's port on the host, for the Console's links to it.
       - CANVAS_PUBLIC_PORT=${CANVAS_PORT:-3001}
-      - SPENDING_CAP_USD=${SPENDING_CAP_USD:-10}
       # Read from the host's environment or an `.env` file; never put the key in the Canvas.
       - ANTHROPIC_API_KEY
       - RUN_TIME_LIMIT_SECONDS

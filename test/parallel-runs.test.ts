@@ -185,32 +185,6 @@ describe("Parallel Runs", () => {
       expect(() => maxParallelRunsFromEnvironment({ MAX_PARALLEL_RUNS: bad })).toThrow(/MAX_PARALLEL_RUNS/);
     }
   });
-
-  it("keeps queued Prompts waiting while the spending cap pauses the Console, and starts them once the cap is raised", async () => {
-    const { platform, agent } = await start({ maxParallelRuns: 1, spendingCapUsd: 1 });
-    const queued = new Gate();
-    agent.enqueue(
-      async (run) => {
-        await Promise.race([queued.wait(), run.aborted()]);
-        run.usage({ inputTokens: 500_000, outputTokens: 0 }); // $1 on Sonnet 5.5
-        await run.writeFile("features/a/a.js", "a");
-      },
-      (run) => run.writeFile("features/b/b.js", "b"),
-    );
-    const spender = await platform.sendPrompt({ nickname: "Alice", prompt: "spend it all" });
-    await agent.started(1);
-    const waiting = await platform.sendPrompt({ nickname: "Bob", prompt: "after the cap" });
-    queued.release();
-    expect(await platform.waitForRun(spender.id)).toMatchObject({ state: "landed" });
-
-    // Give a wrongly started Run every chance to show up before checking it didn't.
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(await (await platform.consoleApi(`/api/runs/${waiting.id}`)).json()).toMatchObject({ state: "waiting" });
-    expect(agent.tasks).toHaveLength(1);
-
-    expect(runHostCommand(["raise-cap", "5"], { DATA_DIR: platform.dataDir, SPENDING_CAP_USD: "1" }).exitCode).toBe(0);
-    expect(await platform.waitForRun(waiting.id)).toMatchObject({ state: "landed" });
-  });
 });
 
 function git(platform: TestPlatform, args: string[]): string {

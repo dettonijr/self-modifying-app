@@ -210,20 +210,21 @@ describe("The Run page", () => {
     expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
   });
 
-  it("disables Replay and Roll back while the Console is paused", async () => {
-    const { platform, agent } = await start({ spendingCapUsd: 1 });
+  it("never disables Replay and Roll back for spending, and shows no paused state", async () => {
+    const { platform, agent } = await start();
     agent.enqueue(async (run) => {
-      run.usage({ inputTokens: 500_000, outputTokens: 0 }); // $1 on Sonnet 5.5: the cap
+      run.usage({ inputTokens: 10_000_000, outputTokens: 0 }); // $20 on Sonnet 5.5, twice the old default cap
       await run.writeFile("features/snow/snow.js", "snow");
     });
     const snow = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
     const page = await newPage(platform, "Alice");
     await page.goto(`${platform.consoleUrl}/runs/${snow.id}`);
-    await expect.poll(() => page.getByTestId("paused").isVisible(), { timeout: 10_000 }).toBe(true);
     for (const name of ["Replay", "Roll back"]) {
       const button = page.getByRole("button", { name, exact: true });
-      await expect.poll(() => button.isDisabled(), { timeout: 10_000 }).toBe(true);
+      await button.waitFor({ timeout: 10_000 });
+      expect(await button.isDisabled()).toBe(false);
     }
+    expect(await page.getByTestId("paused").count()).toBe(0);
   });
 
   it("shows \"No such Run\" for an unknown id", async () => {

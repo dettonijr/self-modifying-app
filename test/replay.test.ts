@@ -96,16 +96,6 @@ describe("Replay", () => {
     expect((await platform.replay({ nickname: "Alice", commit: "nope" })).status).toBe(404);
     expect((await platform.consoleApi("/api/replays", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ commit: starter }) })).status).toBe(400);
   });
-
-  it("is refused while the Console is paused by the spending cap", async () => {
-    const { platform, agent } = await start({ spendingCapUsd: 1 });
-    agent.enqueue(async (run) => {
-      run.usage({ inputTokens: 500_000, outputTokens: 0 }); // $1 on Sonnet 5.5
-      await run.writeFile("index.html", "<h1>Snowing</h1>");
-    });
-    const snow = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
-    expect((await platform.replay({ nickname: "Alice", commit: snow.commit! })).status).toBe(503);
-  });
 });
 
 function git(platform: TestPlatform, args: string[]): string {

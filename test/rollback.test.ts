@@ -104,23 +104,13 @@ describe("Rollback", () => {
     await platform.waitForRun(busy.id);
   });
 
-  it("refuses a Rollback while the Console is paused, and of anything not in the history (404)", async () => {
-    const { platform, agent } = await start({ spendingCapUsd: 1 });
-    const snow = await land(platform, agent, "Alice", "make it snow", (run) => {
-      run.usage({ inputTokens: 100_000, outputTokens: 0 });
-      return run.writeFile("features/snow/snow.js", "snow");
-    });
+  it("refuses a Rollback of anything not in the history (404)", async () => {
+    const { platform, agent } = await start();
+    const snow = await land(platform, agent, "Alice", "make it snow", (run) => run.writeFile("features/snow/snow.js", "snow"));
     const starter = git(platform, ["rev-parse", `${snow.commit}^`]);
     expect((await rollback(platform, "Carol", starter)).status).toBe(404);
     expect((await rollback(platform, "Carol", "f".repeat(40))).status).toBe(404);
     expect((await rollback(platform, "", snow.commit!)).status).toBe(400);
-
-    agent.enqueue((run) => {
-      run.usage({ inputTokens: 0, outputTokens: 100_000 });
-      return run.writeFile("features/rain/rain.js", "rain");
-    });
-    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it rain" })).id);
-    expect((await rollback(platform, "Carol", snow.commit!)).status).toBe(503);
   });
 
   it("says so when the change is already undone", async () => {

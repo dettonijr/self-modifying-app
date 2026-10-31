@@ -72,9 +72,6 @@
 <body>
   <main class="page">
   <nav><a href="/">← Prompts</a></nav>
-  <p class="paused" data-testid="paused" id="paused" role="alert" hidden>
-    The Console is paused: the game has reached its spending cap. Replays and Rollbacks are refused until the host raises it.
-  </p>
   <p id="status" role="status"></p>
 
   <section id="missing" class="card" data-testid="missing" hidden>
@@ -105,7 +102,7 @@
   </main>
 
   <script type="module">
-    import { actionsFor, connectLive, followSpending, isFinished, modelName, runUrl, span } from "/console-shared.js";
+    import { actionsFor, connectLive, isFinished, modelName, runUrl, span } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     // The id from the URL: a Run id, or the commit of a Landed change.
@@ -304,15 +301,12 @@
       if (pending) return void pending.push(message);
       if (run === undefined) return;
       if (message.type === "run" && message.run.id === run.id) {
-        const finished = isFinished(message.run) && !isFinished(run);
         Object.assign(run, message.run);
         renderDetails();
-        if (finished) void refreshSpending();
       }
       if ((message.run?.id ?? message.runId) === run.id) for (const section of sections) section.live(message);
     }
 
-    const refreshSpending = followSpending((spending) => ($("paused").hidden = !spending.paused));
     connectLive(handleLive);
   </script>
 </body>

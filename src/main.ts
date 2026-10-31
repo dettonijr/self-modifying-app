@@ -1,5 +1,4 @@
 import { agentFromEnvironment } from "./claude-agent.ts";
-import { configuredCapUsd } from "./budget.ts";
 import { startPlatform } from "./platform.ts";
 import { maxParallelRunsFromEnvironment } from "./parallel-limit.ts";
 
@@ -10,7 +9,6 @@ const platform = await startPlatform({
   consolePort: Number(process.env.CONSOLE_PORT ?? 3000),
   canvasPort: Number(process.env.CANVAS_PORT ?? 3001),
   canvasPublicPort: process.env.CANVAS_PUBLIC_PORT ? Number(process.env.CANVAS_PUBLIC_PORT) : undefined,
-  spendingCapUsd: configuredCapUsd(),
   maxParallelRuns: maxParallelRunsFromEnvironment(),
 });
 

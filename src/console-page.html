@@ -10,8 +10,6 @@
     .masthead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; margin-bottom: 1rem; }
     .masthead h1 { display: flex; align-items: center; gap: 0.6rem; }
     .masthead h1::before { content: ""; width: 0.75rem; height: 0.75rem; border-radius: 4px; background: var(--color-accent); box-shadow: 0.9rem 0 0 var(--color-claude), 1.8rem 0 0 var(--color-success); margin-right: 1.8rem; }
-    .spending { margin: 0; padding: 0.35rem 0.8rem; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-muted); font-size: 0.9rem; font-variant-numeric: tabular-nums; }
-    .spending span { color: var(--color-text); font-weight: 700; }
 
     form { display: grid; gap: 0.6rem; }
     .row { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; }
@@ -50,11 +48,7 @@
   <main class="page">
   <header class="masthead">
     <h1>Console</h1>
-    <p class="spending">Spent <span data-testid="spending" id="spending">…</span></p>
   </header>
-  <p class="paused" data-testid="paused" id="paused" role="alert" hidden>
-    The Console is paused: the game has reached its spending cap. New Prompts are refused until the host raises it.
-  </p>
 
   <form id="nickname-form" class="card" hidden>
     <label for="nickname">Nickname</label>
@@ -87,11 +81,10 @@
   </main>
 
   <script type="module">
-    import { actionsFor, connectLive, fillModels, followSpending, isFinished, modelName, pausable, runUrl, span } from "/console-shared.js";
+    import { actionsFor, connectLive, fillModels, isFinished, modelName, runUrl, span } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     fillModels($("model"));
-    pausable(document.querySelector("#prompt-form button[type=submit]"));
     const MAX_PROMPT = 500;
 
     function readNickname() {
@@ -164,7 +157,6 @@
         else $("prompts").prepend(updated);
         entries.set(run.id, updated);
         if (myRuns.has(run.id)) showMyRun(run);
-        if (isFinished(run)) void refreshSpending();
       }
       $("prompts-empty").hidden = entries.size > 0;
     }
@@ -233,13 +225,6 @@
       myRuns.add(run.id);
       setStatus(run.state === "waiting" ? `Your ${what} is in the queue…` : started);
     }
-
-    const usd = (amount) => `$${amount.toFixed(2)}`;
-
-    const refreshSpending = followSpending((spending) => {
-      $("spending").textContent = `${usd(spending.totalUsd)} of ${usd(spending.capUsd)}`;
-      $("paused").hidden = !spending.paused;
-    });
 
     showPlayer();
     updateCounter();

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
-import type { Budget } from "./budget.ts";
 import type { CanvasRepository, ChangeKind, ChangeMetadata, LandedChange, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult, LandStep } from "./lander.ts";
 import { rulesFor } from "./change-kinds.ts";
@@ -12,7 +11,6 @@ import { isFinished, type RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
 export const MAX_NICKNAME_LENGTH = 40;
-export const PAUSED_MESSAGE = "The Console is paused: the game has reached its spending cap. The host can raise it to continue.";
 
 /**
  * `waiting → running → landing → landed`. If Landing conflicts or fails the
@@ -105,8 +103,8 @@ const LAND_STEP_TEXT: Record<LandStep, string> = {
 export const RESTARTED_LOG_TEXT = "Platform restarted, starting over";
 /**
  * While Prompts are waiting, how often to check whether the host raised the
- * spending cap or the parallel Run limit. The host's commands only write
- * files, so nothing tells the platform.
+ * parallel Run limit. `set-parallel-runs` only writes a file, so nothing
+ * tells the platform.
  */
 const WAITING_RECHECK_MS = 500;
 
@@ -132,9 +130,9 @@ export interface ReplayRequest {
 export class ChangeRefused extends Error {
   /**
    * `invalid`: the request breaks a rule. `already-waiting`: the Player already has a Prompt in the queue.
-   * `paused`: the spending cap is reached. `not-found`: no such change in the history.
+   * `not-found`: no such change in the history.
    */
-  readonly reason: "invalid" | "already-waiting" | "paused" | "not-found";
+  readonly reason: "invalid" | "already-waiting" | "not-found";
   constructor(reason: ChangeRefused["reason"], message: string) {
     super(message);
     this.reason = reason;
@@ -152,7 +150,6 @@ export class Runs {
   private readonly repo: CanvasRepository;
   private readonly agent: Agent;
   private readonly lander: Lander;
-  private readonly budget: Budget;
   private readonly store: RunStore;
   private readonly worktreesDir: string;
   /** The parallel Run limit in force, read each time waiting Prompts might start. */
@@ -165,21 +162,20 @@ export class Runs {
   private readonly queue: RunView[] = [];
   /**
    * Runs that were in progress when the platform last stopped, oldest first.
-   * They start before waiting Prompts, within the limit but whatever the
-   * spending cap: they were already let in.
+   * They start before waiting Prompts, within the limit: they were already
+   * let in.
    */
   private readonly resuming: RunView[] = [];
   private readonly listeners = new Set<(event: RunsEvent) => void>();
   private closed = false;
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
-  /** Set while Prompts are waiting, to start them if the host raises the cap or the limit. */
+  /** Set while Prompts are waiting, to start them if the host raises the limit. */
   private waitingRecheck: NodeJS.Timeout | undefined;
 
-  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; store: RunStore; worktreesDir: string; maxParallelRuns?: number | (() => number) }) {
+  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; store: RunStore; worktreesDir: string; maxParallelRuns?: number | (() => number) }) {
     this.repo = options.repo;
     this.agent = options.agent;
     this.lander = options.lander;
-    this.budget = options.budget;
     this.store = options.store;
     this.worktreesDir = options.worktreesDir;
     const limit = options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS;
@@ -188,7 +184,6 @@ export class Runs {
 
   /** Validates a Prompt and queues its Run, or throws `ChangeRefused`. Each Player (nickname) may have one Prompt waiting. */
   start(request: PromptRequest): RunView {
-    if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
     return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, time: now(), progress: [], log: [] });
   }
@@ -211,14 +206,11 @@ export class Runs {
 
   /** Queues a Run of `kind` about the change that Landed as `request.commit`, with that change's Prompt. */
   private async enqueueAbout(kind: "Replay" | "Rollback", request: { nickname: unknown; commit: unknown; model?: unknown }): Promise<RunView> {
-    if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     const nickname = validNickname(request.nickname);
     if (nickname === undefined) throw new ChangeRefused("invalid", "Pick a nickname first");
     const model = rulesFor({ kind }).playerPicksModel ? validModel(request.model) : DEFAULT_MODEL;
     const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
     if (original === undefined) throw new ChangeRefused("not-found", "There's no such change in the history");
-    // Checked again: the cap may have been reached while the history was read.
-    if (this.budget.spending().paused) throw new ChangeRefused("paused", PAUSED_MESSAGE);
     return this.enqueue({
       id: randomUUID(),
       state: "waiting",
@@ -252,8 +244,7 @@ export class Runs {
   /**
    * Picks up every saved Run after a restart. Leftover worktrees are removed;
    * Runs that were in progress start again from scratch on the latest `main`,
-   * ahead of the queue (they were already let in, so they wait for a slot but
-   * not for the spending cap); waiting Prompts are queued again in the same
+   * ahead of the queue; waiting Prompts are queued again in the same
    * order. Landed changes on `main` with no Run record are listed as Landed
    * Runs, older than every saved one.
    */
@@ -336,9 +327,8 @@ export class Runs {
   }
 
   /**
-   * Starts waiting Prompts, oldest first, while slots are free. While the
-   * spending cap pauses the Console they stay waiting, and start once the
-   * host raises the cap. Lowering the limit never stops Runs in progress.
+   * Starts waiting Prompts, oldest first, while slots are free. Lowering the
+   * limit never stops Runs in progress.
    */
   private startWaitingRuns(): void {
     clearTimeout(this.waitingRecheck);
@@ -347,11 +337,9 @@ export class Runs {
     const limit = this.maxParallelRuns();
     while (this.inProgress.size < limit && this.resuming.length > 0) this.startRun(this.resuming.shift()!);
     let started = false;
-    if (!this.budget.spending().paused) {
-      while (this.inProgress.size < limit && this.queue.length > 0) {
-        started = true;
-        this.startRun(this.queue.shift()!);
-      }
+    while (this.inProgress.size < limit && this.queue.length > 0) {
+      started = true;
+      this.startRun(this.queue.shift()!);
     }
     if (started) this.publishQueue();
     if (this.queue.length + this.resuming.length > 0) {
@@ -536,7 +524,6 @@ export class Runs {
   private async runAgent(run: RunView, worktree: Worktree, signal: AbortSignal, instructions: string, model: Model): Promise<string | undefined> {
     const events = this.agent.run({ worktree: worktree.dir, instructions, model, signal });
     for await (const event of events) {
-      if (event.type === "usage") this.budget.record(model, event.usage);
       if (event.type === "progress") {
         const progress: RunProgress = event.file === undefined ? { message: event.message } : { message: event.message, file: event.file };
         run.progress.push(progress);

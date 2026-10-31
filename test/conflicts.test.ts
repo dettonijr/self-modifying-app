@@ -89,8 +89,6 @@ describe("Conflict handling", () => {
     expect(git(platform, ["rev-parse", `${finished.commit}^`])).toBe(bob.commit);
     expect(await (await platform.fetchCanvas("/")).text()).toContain("Snow and Rain");
     expect(await (await platform.fetchCanvas("/features/snow/snow.js")).text()).toBe("snow");
-    // The resolution's tokens count towards spending.
-    expect(((await (await platform.consoleApi("/api/spending")).json()) as { totalUsd: number }).totalUsd).toBeCloseTo(0.003);
     expect(git(platform, ["branch", "--list"])).toBe("* main");
   });
 
