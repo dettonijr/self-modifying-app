@@ -14,11 +14,17 @@
     #history { list-style: none; padding: 0; }
     #history li { border-top: 1px solid #ddd; padding: 0.5rem 0; }
     #history time { color: #666; font-size: 0.85em; }
+    .spending { color: #666; font-variant-numeric: tabular-nums; }
+    .paused { background: #fff4e5; border: 1px solid #f0b54a; padding: 0.75rem 1rem; border-radius: 0.25rem; }
     [hidden] { display: none !important; }
   </style>
 </head>
 <body>
   <h1>Console</h1>
+  <p class="spending">Spent <span data-testid="spending" id="spending">…</span></p>
+  <p class="paused" data-testid="paused" id="paused" role="alert" hidden>
+    The Console is paused: the game has reached its spending cap. New Prompts are refused until the host raises it.
+  </p>
 
   <form id="nickname-form" hidden>
     <label for="nickname">Nickname</label>
@@ -112,8 +118,8 @@
         const response = await fetch(`/api/runs/${encodeURIComponent(id)}`);
         if (!response.ok) return;
         const run = await response.json();
-        if (run.state === "landed") return setStatus("Your change Landed!"), refreshHistory();
-        if (run.state === "rejected") return setStatus(`Your Prompt didn't Land: ${run.error}`, true);
+        if (run.state === "landed") return setStatus("Your change Landed!"), refreshHistory(), refreshSpending();
+        if (run.state === "rejected") return setStatus(`Your Prompt didn't Land: ${run.error}`, true), refreshSpending();
       }
     }
 
@@ -137,10 +143,24 @@
       );
     }
 
+    const usd = (amount) => `$${amount.toFixed(2)}`;
+
+    // Polled for now; ticket 05's WebSocket can push the same /api/spending body.
+    async function refreshSpending() {
+      const response = await fetch("/api/spending");
+      if (!response.ok) return;
+      const { totalUsd, capUsd, paused } = await response.json();
+      $("spending").textContent = `${usd(totalUsd)} of ${usd(capUsd)}`;
+      $("paused").hidden = !paused;
+      document.querySelector("#prompt-form button[type=submit]").disabled = paused;
+    }
+
     showPlayer();
     updateCounter();
     void refreshHistory();
+    void refreshSpending();
     setInterval(refreshHistory, 5000);
+    setInterval(refreshSpending, 2000);
   </script>
 </body>
 </html>
