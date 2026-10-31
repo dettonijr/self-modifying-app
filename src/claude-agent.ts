@@ -1,4 +1,4 @@
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { query as sdkQuery, type CanUseTool, type Options, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { addUsage, unavailableAgent, USAGE_KINDS, zeroUsage, type Agent, type AgentEvent, type AgentTask, type TokenUsage, type UsageCounts } from "./agent.ts";
@@ -66,16 +66,21 @@ export class ClaudeAgent implements Agent {
     const timer = setTimeout(() => stop(`The Run went over its time limit of ${Math.round(this.options.timeLimitMs / 1000)} seconds`), this.options.timeLimitMs);
 
     const usage = new UsageTracker();
+    const toolCalls = new ToolCalls(task.worktree);
     try {
-      const options = await this.sdkOptions(task, abort);
+      const options = await this.sdkOptions(task, abort, toolCalls);
       for await (const message of this.query({ prompt: promptFor(task), options })) {
         if (message.type === "assistant") {
           for (const event of eventsOf(message.message.content as unknown[], task.worktree)) yield event;
+          toolCalls.called(message.message.content as unknown[]);
           const delta = usage.seeMessage(message.message.id, message.message.usage as unknown as Record<string, number | undefined>);
           if (delta) yield { type: "usage", usage: delta };
           if (usage.total() > this.options.tokenLimit) stop(`The Run went over its limit of ${this.options.tokenLimit} tokens`);
           if (stopReason !== undefined) break;
+        } else if (message.type === "user") {
+          for (const event of await toolCalls.finished(message.message.content)) yield event;
         } else if (message.type === "result") {
+          for (const event of await toolCalls.finished()) yield event;
           const delta = usage.seeTotals(message.modelUsage);
           if (delta) yield { type: "usage", usage: delta };
           if (stopReason !== undefined) break;
@@ -99,7 +104,7 @@ export class ClaudeAgent implements Agent {
     }
   }
 
-  private async sdkOptions(task: AgentTask, abort: AbortController): Promise<Options> {
+  private async sdkOptions(task: AgentTask, abort: AbortController, toolCalls: ToolCalls): Promise<Options> {
     const conventions = await readFile(path.join(task.worktree, "CLAUDE.md"), "utf8").catch(() => "");
     return {
       cwd: task.worktree,
@@ -107,8 +112,10 @@ export class ClaudeAgent implements Agent {
       abortController: abort,
       tools: [...FILE_TOOLS],
       disallowedTools: [...FORBIDDEN_TOOLS],
-      canUseTool: confineTo(task.worktree),
+      canUseTool: confineTo(task.worktree, (toolUseID, reason) => toolCalls.refused(toolUseID, reason)),
       permissionMode: "default",
+      // Raw thinking is never returned; summaries are, for the Run's log.
+      thinking: { type: "adaptive", display: "summarized" },
       // Nothing from disk: a Prompt could have written `.claude/settings.json` or `.mcp.json` into the Canvas.
       settingSources: [],
       mcpServers: {},
@@ -146,15 +153,16 @@ function promptFor(task: AgentTask): string {
 }
 
 /**
- * Turns Claude's text replies into message events, and file-editing tool calls
- * into progress events with worktree-relative paths. Hidden reasoning and other
- * tool calls are left out.
+ * Turns Claude's text replies into message events, thinking summaries into
+ * thinking events, and file-editing tool calls into progress events with
+ * worktree-relative paths. Redacted or empty thinking is left out.
  */
 function eventsOf(content: unknown[], worktree: string): AgentEvent[] {
   const events: AgentEvent[] = [];
   for (const block of content) {
-    const { type, name, input, text } = block as { type?: string; name?: string; input?: { file_path?: unknown }; text?: unknown };
+    const { type, name, input, text, thinking } = block as { type?: string; name?: string; input?: { file_path?: unknown }; text?: unknown; thinking?: unknown };
     if (type === "text" && typeof text === "string" && text.trim() !== "") events.push({ type: "message", text });
+    if (type === "thinking" && typeof thinking === "string" && thinking.trim() !== "") events.push({ type: "thinking", text: thinking });
     if (type !== "tool_use" || (name !== "Write" && name !== "Edit") || typeof input?.file_path !== "string") continue;
     const file = path.relative(worktree, input.file_path);
     events.push({ type: "progress", message: `Editing ${file}`, file });
@@ -164,24 +172,104 @@ function eventsOf(content: unknown[], worktree: string): AgentEvent[] {
 
 /**
  * Permission check for every tool call: only file tools, and only on paths
- * inside the worktree (after following symlinks), never in `.git`.
+ * inside the worktree (after following symlinks), never in `.git`. Each
+ * refusal is also reported to `onRefused` with a short reason for the log.
  */
-export function confineTo(worktree: string): CanUseTool {
-  return async (toolName, input): Promise<PermissionResult> => {
-    if (!FILE_TOOLS.includes(toolName)) return { behavior: "deny", message: `${toolName} isn't available; only file tools are` };
+export function confineTo(worktree: string, onRefused?: (toolUseID: string, reason: string) => void): CanUseTool {
+  return async (toolName, input, { toolUseID }): Promise<PermissionResult> => {
+    const deny = (message: string, reason: string): PermissionResult => {
+      onRefused?.(toolUseID, reason);
+      return { behavior: "deny", message };
+    };
+    if (!FILE_TOOLS.includes(toolName)) return deny(`${toolName} isn't available; only file tools are`, "not available");
     const target = input.file_path ?? input.path;
     if (target === undefined) return { behavior: "allow", updatedInput: input };
-    if (typeof target !== "string" || !path.isAbsolute(target)) return { behavior: "deny", message: "Use an absolute path inside the working directory" };
-    if (!(await isInside(worktree, target))) return { behavior: "deny", message: "Only files inside the working directory can be used" };
+    if (typeof target !== "string" || !path.isAbsolute(target)) return deny("Use an absolute path inside the working directory", "not an absolute path");
+    const where = await locate(worktree, target);
+    if (where === "outside") return deny("Only files inside the working directory can be used", "outside the Canvas");
+    if (where === "git") return deny("Only files inside the working directory can be used", "inside the Canvas's history");
     return { behavior: "allow", updatedInput: input };
   };
 }
 
-async function isInside(worktree: string, target: string): Promise<boolean> {
+async function locate(worktree: string, target: string): Promise<"inside" | "outside" | "git"> {
   const root = await realpath(worktree);
   const resolved = await realpathOfNearest(path.resolve(target));
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return false;
-  return !path.relative(root, resolved).split(path.sep).includes(".git");
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return "outside";
+  return path.relative(root, resolved).split(path.sep).includes(".git") ? "git" : "inside";
+}
+
+/**
+ * Turns tool calls into one log line each, e.g. "Read index.html" or
+ * "Refused: Read /etc/hostname (outside the Canvas)". A call is reported once
+ * its result arrives, so a refusal from `confineTo` can be included; calls
+ * still waiting when the Run ends are reported then. Never the output.
+ */
+class ToolCalls {
+  private readonly worktree: string;
+  private readonly pending = new Map<string, { name: string; input: Record<string, unknown> }>();
+  private readonly refusals = new Map<string, string>();
+
+  constructor(worktree: string) {
+    this.worktree = worktree;
+  }
+
+  called(content: unknown[]): void {
+    for (const block of content) {
+      const { type, id, name, input } = block as { type?: string; id?: unknown; name?: unknown; input?: unknown };
+      if (type !== "tool_use" || typeof id !== "string" || typeof name !== "string") continue;
+      this.pending.set(id, { name, input: typeof input === "object" && input !== null ? (input as Record<string, unknown>) : {} });
+    }
+  }
+
+  refused(toolUseID: string, reason: string): void {
+    this.refusals.set(toolUseID, reason);
+  }
+
+  /** Events for the calls whose results are in `content`, or for every call still waiting when there's no content. */
+  async finished(content?: unknown): Promise<AgentEvent[]> {
+    const ids = content === undefined ? [...this.pending.keys()] : resultIds(content);
+    const events: AgentEvent[] = [];
+    for (const id of ids) {
+      const call = this.pending.get(id);
+      if (!call) continue;
+      this.pending.delete(id);
+      const description = await this.describe(call.name, call.input);
+      const reason = this.refusals.get(id);
+      events.push({ type: "tool", text: reason === undefined ? description : `Refused: ${description} (${reason})` });
+    }
+    return events;
+  }
+
+  private async describe(name: string, input: Record<string, unknown>): Promise<string> {
+    const { file_path: file, pattern, path: dir } = input;
+    const within = typeof dir === "string" && path.resolve(this.worktree, dir) !== path.resolve(this.worktree) ? ` in ${await this.folder(dir)}` : "";
+    if (name === "Glob" && typeof pattern === "string") return `Glob ${pattern}${within}`;
+    if (name === "Grep" && typeof pattern === "string") return `Grep '${pattern}'${within}`;
+    if (typeof file === "string") return `${name} ${this.relative(file)}`;
+    return name;
+  }
+
+  /** A worktree-relative path, or the path as given when it isn't inside the worktree. */
+  private relative(target: string): string {
+    if (!path.isAbsolute(target)) return target;
+    const relative = path.relative(this.worktree, target);
+    return relative.startsWith("..") || path.isAbsolute(relative) ? target : relative;
+  }
+
+  /** Like `relative`, with a trailing slash when it's a folder. */
+  private async folder(target: string): Promise<string> {
+    const isFolder = await stat(path.resolve(this.worktree, target)).then((s) => s.isDirectory(), () => false);
+    return this.relative(target) + (isFolder ? "/" : "");
+  }
+}
+
+function resultIds(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => {
+    const { type, tool_use_id: id } = block as { type?: string; tool_use_id?: unknown };
+    return type === "tool_result" && typeof id === "string" ? [id] : [];
+  });
 }
 
 /** The real path of `target`, following symlinks in whatever part of it exists. */

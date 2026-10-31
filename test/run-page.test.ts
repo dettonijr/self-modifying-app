@@ -140,6 +140,89 @@ describe("The Run page", () => {
     expect(await page.getByTestId("log").textContent()).not.toContain("No log recorded");
   });
 
+  it("shows Claude's thinking labelled and dimmer than its messages, collapsed to its first line until clicked, and its tool calls", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue(async (run) => {
+      run.thinking("The Player wants snow.\nA new feature folder fits the conventions.");
+      run.thinking("Short thought.");
+      run.message("I'll add some snow.");
+      run.tool("Write features/snow/snow.js");
+      await run.writeFile("features/snow/snow.js", "snow");
+    });
+    const run = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${run.id}`);
+    const log = page.getByTestId("log");
+    const [long, short] = await log.locator('li[data-source="thinking"]').all();
+    await long.waitFor();
+    expect(await long.locator(".source").textContent()).toBe("Thinking");
+    expect(await log.locator('li[data-source="tool"] .source').textContent()).toBe("Tool");
+    expect(await log.locator('li[data-source="tool"] .text').textContent()).toBe("Write features/snow/snow.js");
+
+    const brightness = (selector: string) =>
+      log.locator(selector).first().evaluate((element) => {
+        const [r, g, b] = getComputedStyle(element).color.match(/[\d.]+/g)!.map(Number);
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      });
+    expect(await brightness('li[data-source="thinking"] .text')).toBeLessThan(await brightness('li[data-source="claude"] .text'));
+
+    expect(await long.locator(".text").textContent()).toBe("The Player wants snow.\nA new feature folder fits the conventions.");
+    await expect.poll(() => long.innerText()).toContain("The Player wants snow.");
+    expect(await long.innerText()).not.toContain("A new feature folder");
+    await long.getByText("The Player wants snow.").click();
+    await expect.poll(() => long.innerText()).toContain("A new feature folder fits the conventions.");
+    expect(await short.innerText()).toContain("Short thought.");
+    expect(await short.locator("summary").count()).toBe(0);
+  });
+
+  it("filters the log by source with chips, all on at first, applying to live entries and remembered after a reload", async () => {
+    const { platform, agent } = await start();
+    const gate = new Gate();
+    agent.enqueue(async (run) => {
+      run.thinking("First thought.");
+      run.tool("Read index.html");
+      run.message("I'll add some snow.");
+      await gate.wait();
+      run.thinking("Second thought.");
+      run.tool("Write features/snow/snow.js");
+      await run.writeFile("features/snow/snow.js", "snow");
+    });
+    const run = await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" });
+    await agent.started(1);
+
+    const page = await newPage(platform);
+    await page.goto(`${platform.consoleUrl}/runs/${run.id}`);
+    const log = page.getByTestId("log");
+    const visible = () => log.locator("li:visible").evaluateAll((items) => items.map((item) => `${item.getAttribute("data-source")}: ${item.querySelector(".text")?.textContent}`));
+    const chip = (name: string) => log.getByRole("button", { name, exact: true });
+    await expect.poll(visible, { timeout: 10_000 }).toEqual(["platform: Queued", "platform: Started", "thinking: First thought.", "tool: Read index.html", "claude: I'll add some snow."]);
+    for (const name of ["Platform", "Claude", "Thinking", "Tools"]) expect(await chip(name).getAttribute("aria-pressed")).toBe("true");
+
+    await chip("Thinking").click();
+    await chip("Platform").click();
+    expect(await chip("Thinking").getAttribute("aria-pressed")).toBe("false");
+    await expect.poll(visible).toEqual(["tool: Read index.html", "claude: I'll add some snow."]);
+
+    gate.release();
+    await platform.waitForRun(run.id);
+    await expect.poll(visible, { timeout: 10_000 }).toEqual(["tool: Read index.html", "claude: I'll add some snow.", "tool: Write features/snow/snow.js"]);
+
+    await page.reload();
+    await expect.poll(visible, { timeout: 10_000 }).toEqual(["tool: Read index.html", "claude: I'll add some snow.", "tool: Write features/snow/snow.js"]);
+    expect(await chip("Platform").getAttribute("aria-pressed")).toBe("false");
+    await chip("Tools").click();
+    await chip("Platform").click();
+    await expect.poll(visible).toEqual([
+      "platform: Queued",
+      "platform: Started",
+      "claude: I'll add some snow.",
+      "platform: Rebasing onto the latest Canvas",
+      "platform: Checking that the Canvas renders",
+      "platform: Landed",
+    ]);
+  });
+
   it("says \"No log recorded\" for a Landed change from before Runs were saved", async () => {
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "sma-run-page-"));
     onTestFinished(() => rm(dataDir, { recursive: true, force: true }));

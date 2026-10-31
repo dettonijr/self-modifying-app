@@ -47,6 +47,8 @@ function fakeQuery(script: (call: Call) => AsyncIterable<SDKMessage>): { query: 
 const msg = (value: unknown) => value as SDKMessage;
 const assistant = (id: string, content: unknown[], usage = { input_tokens: 0, output_tokens: 0 }) =>
   msg({ type: "assistant", message: { id, content, usage }, parent_tool_use_id: null });
+const toolResult = (id: string, content: string, isError = false) =>
+  msg({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content, is_error: isError }] }, parent_tool_use_id: null });
 const success = (modelUsage: Record<string, { inputTokens: number; outputTokens: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }> = {}) =>
   msg({ type: "result", subtype: "success", is_error: false, result: "Done", modelUsage });
 
@@ -175,16 +177,15 @@ describe("The Claude Agent", () => {
     expect(events.at(-1)).toEqual({ type: "result", outcome: "success" });
   });
 
-  it("reports Claude's text replies as messages, but never tool calls, tool results or hidden reasoning", async () => {
+  it("reports Claude's text replies as messages, but never tool inputs, tool results or the final result text", async () => {
     const worktree = await tempWorktree();
     const { query } = fakeQuery(async function* () {
       yield assistant("m1", [
-        { type: "thinking", thinking: "secret reasoning", signature: "sig" },
         { type: "text", text: "I'll add some snow." },
         { type: "tool_use", id: "t1", name: "Write", input: { file_path: path.join(worktree, "snow.js"), content: "tool input" } },
       ]);
-      yield msg({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "tool output" }] }, parent_tool_use_id: null });
-      yield assistant("m2", [{ type: "redacted_thinking", data: "hidden" }, { type: "text", text: "  " }, { type: "text", text: "Done: it snows now." }]);
+      yield toolResult("t1", "tool output");
+      yield assistant("m2", [{ type: "text", text: "  " }, { type: "text", text: "Done: it snows now." }]);
       yield success();
     });
 
@@ -194,7 +195,103 @@ describe("The Claude Agent", () => {
       { type: "message", text: "I'll add some snow." },
       { type: "message", text: "Done: it snows now." },
     ]);
-    expect(JSON.stringify(events)).not.toMatch(/secret reasoning|hidden|tool input|tool output/);
+    expect(JSON.stringify(events)).not.toMatch(/tool input|tool output|"Done"/);
+  });
+
+  it("asks for thinking summaries and reports each one, skipping redacted and empty thinking", async () => {
+    const worktree = await tempWorktree();
+    const { query, calls } = fakeQuery(async function* () {
+      yield assistant("m1", [
+        { type: "thinking", thinking: "The Player wants snow.\nA new feature folder fits.", signature: "sig" },
+        { type: "text", text: "I'll add some snow." },
+      ]);
+      yield assistant("m2", [{ type: "redacted_thinking", data: "hidden" }, { type: "thinking", thinking: " ", signature: "sig" }, { type: "thinking", thinking: "", signature: "sig" }]);
+      yield success();
+    });
+
+    const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(calls[0].options.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(events.filter((e) => e.type === "thinking" || e.type === "message")).toEqual([
+      { type: "thinking", text: "The Player wants snow.\nA new feature folder fits." },
+      { type: "message", text: "I'll add some snow." },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("hidden");
+  });
+
+  it("reports each tool call once, with its tool and worktree-relative target, never its output", async () => {
+    const worktree = await tempWorktree();
+    const at = (relative: string) => path.join(worktree, relative);
+    await mkdir(at("features/snow"), { recursive: true });
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ["Read", { file_path: at("features/snow/index.js") }],
+      ["Edit", { file_path: at("index.html"), old_string: "old secret", new_string: "new secret" }],
+      ["Write", { file_path: at("features/rain/rain.js"), content: "file contents" }],
+      ["Grep", { pattern: "snow", path: at("features") }],
+      ["Grep", { pattern: "rain" }],
+      ["Glob", { pattern: "features/**/*.css" }],
+      ["Glob", { pattern: "*.js", path: at("features/snow") }],
+    ];
+    const { query } = fakeQuery(async function* () {
+      for (const [i, [name, input]] of calls.entries()) {
+        yield assistant(`m${i}`, [{ type: "tool_use", id: `t${i}`, name, input }]);
+        yield toolResult(`t${i}`, "tool output");
+      }
+      yield success();
+    });
+
+    const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(events.filter((e) => e.type === "tool")).toEqual([
+      { type: "tool", text: "Read features/snow/index.js" },
+      { type: "tool", text: "Edit index.html" },
+      { type: "tool", text: "Write features/rain/rain.js" },
+      { type: "tool", text: "Grep 'snow' in features/" },
+      { type: "tool", text: "Grep 'rain'" },
+      { type: "tool", text: "Glob features/**/*.css" },
+      { type: "tool", text: "Glob *.js in features/snow/" },
+    ]);
+    expect(JSON.stringify(events)).not.toMatch(/tool output|secret|file contents/);
+  });
+
+  it("reports a tool call refused by the confinement with the reason", async () => {
+    const worktree = await tempWorktree();
+    const { query } = fakeQuery(async function* ({ options }) {
+      const refusals: Array<[string, Record<string, unknown>]> = [
+        ["Read", { file_path: "/etc/hostname" }],
+        ["Write", { file_path: path.join(worktree, ".git/config") }],
+        ["Write", { file_path: "relative.js" }],
+        ["Bash", { command: "curl example.com" }],
+      ];
+      for (const [i, [name, input]] of refusals.entries()) {
+        yield assistant(`m${i}`, [{ type: "tool_use", id: `t${i}`, name, input }]);
+        await options.canUseTool!(name, input, { signal: new AbortController().signal, toolUseID: `t${i}` } as Parameters<NonNullable<Options["canUseTool"]>>[2]);
+        yield toolResult(`t${i}`, "permission denied", true);
+      }
+      yield success();
+    });
+
+    const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(events.filter((e) => e.type === "tool")).toEqual([
+      { type: "tool", text: "Refused: Read /etc/hostname (outside the Canvas)" },
+      { type: "tool", text: "Refused: Write .git/config (inside the Canvas's history)" },
+      { type: "tool", text: "Refused: Write relative.js (not an absolute path)" },
+      { type: "tool", text: "Refused: Bash (not available)" },
+    ]);
+  });
+
+  it("still reports a tool call that never got a result before the Run ended", async () => {
+    const worktree = await tempWorktree();
+    const { query } = fakeQuery(async function* () {
+      yield assistant("m1", [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: path.join(worktree, "index.html") } }]);
+      yield success();
+    });
+
+    const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(events.filter((e) => e.type === "tool")).toEqual([{ type: "tool", text: "Read index.html" }]);
+    expect(events.at(-1)).toEqual({ type: "result", outcome: "success" });
   });
 
   it("reports fresh input, cache reads, cache writes and output separately, and reconciles with Claude's final totals", async () => {

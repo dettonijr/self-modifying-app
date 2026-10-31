@@ -11,6 +11,10 @@ export interface FakeAgentContext {
   progress(message: string, file?: string): void;
   /** Says something as Claude would, for the Run's log. */
   message(text: string): void;
+  /** A summary of Claude's thinking, for the Run's log. */
+  thinking(text: string): void;
+  /** A tool call as the log shows it, e.g. "Read index.html". */
+  tool(text: string): void;
   usage(usage: TokenUsage): void;
   /** Resolves when the task's signal is aborted; await it to simulate hanging. */
   aborted(): Promise<void>;
@@ -62,6 +66,8 @@ export class FakeAgent implements Agent {
       },
       progress: (message, file) => events.push({ type: "progress", message, file }),
       message: (text) => events.push({ type: "message", text }),
+      thinking: (text) => events.push({ type: "thinking", text }),
+      tool: (text) => events.push({ type: "tool", text }),
       usage: (usage) => events.push({ type: "usage", usage }),
       aborted: () =>
         new Promise((resolve) => {

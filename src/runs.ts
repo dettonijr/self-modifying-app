@@ -75,7 +75,8 @@ export interface RunUsage extends UsageCounts {
 export interface LogEntry {
   /** When it happened, as an ISO 8601 timestamp. */
   time: string;
-  source: "claude" | "platform";
+  /** "claude" for Claude's messages, "thinking" for its thinking summaries, "tool" for its tool calls. */
+  source: "claude" | "platform" | "thinking" | "tool";
   text: string;
 }
 
@@ -581,6 +582,7 @@ export class Runs {
         }
       }
       if (event.type === "message" && event.text.trim() !== "") this.log(run, "claude", event.text);
+      if ((event.type === "thinking" || event.type === "tool") && event.text.trim() !== "") this.log(run, event.type, event.text);
       if (event.type === "usage") this.addUsage(run, model, event.usage);
       if (event.type === "result") return event.outcome === "failure" ? event.error : undefined;
     }

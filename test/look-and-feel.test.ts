@@ -46,9 +46,11 @@ describe("Look and feel", () => {
     return context.newPage();
   }
 
-  /** A Landed Run with a diff and a long log line, a rejected one, and one held in progress until the test ends. */
+  /** A Landed Run with a diff and long log lines (thinking, a tool call and a message), a rejected one, and one held in progress until the test ends. */
   async function playSomeRuns(platform: TestPlatform, agent: FakeAgent) {
     agent.enqueue(async (run) => {
+      run.thinking("The Player wants snow over the whole page.\nA new feature folder fits, with a-very-long-unbroken-thought-" + "y".repeat(120));
+      run.tool("Grep 'snow' in features/" + "deeply/nested/".repeat(10));
       run.message("I'll add a snowfall feature with a very-long-unbroken-word-" + "x".repeat(120));
       await run.writeFile("features/snow/snow.js", `// ${"a-very-long-line-of-code-".repeat(12)}\nconsole.log("snow");\n`);
     });
@@ -147,6 +149,20 @@ describe("Look and feel", () => {
     expect(rollback.background).not.toBe(send.background);
     expect(rollback.background).not.toBe(keep.background);
 
+    await page.goto(platform.consoleUrl + `/runs/${landed.id}`);
+    const thinking = page.locator('li[data-source="thinking"] summary');
+    await thinking.waitFor();
+    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    for (const target of [...(await page.locator(".filters button").all()), thinking]) {
+      const look = await target.evaluate(effectiveLook);
+      const name = await target.textContent();
+      expect(contrast(look.color, look.background), `${name}: ${look.color} on ${look.background}`).toBeGreaterThanOrEqual(4.5);
+    }
+    const on = await page.getByRole("button", { name: "Claude", exact: true }).evaluate(effectiveLook);
+    const off = await page.getByRole("button", { name: "Tools", exact: true }).evaluate(effectiveLook);
+    expect(on.background).not.toBe(off.background);
+    await page.goto(platform.consoleUrl + "/");
+
     // Disabled: nothing in the Console disables Send any more, so disable it here to check the style.
     const disabledSend = page.getByRole("button", { name: "Send" });
     await disabledSend.evaluate((button: HTMLButtonElement) => (button.disabled = true));
@@ -173,6 +189,7 @@ describe("Look and feel", () => {
       await page.goto(platform.consoleUrl + `/runs/${landed.id}`);
       await page.locator(".file summary").first().click();
       await page.locator("pre.diff").first().waitFor();
+      await page.locator('li[data-source="thinking"] summary').click();
       await expectFitsPhone(page, "Run page");
 
       await viewCanvasWithBanner(page, platform);
@@ -204,6 +221,16 @@ async function expectFitsPhone(page: Page, what: string) {
 function buttonLook(element: Element) {
   const style = getComputedStyle(element);
   return { color: style.color, background: style.backgroundColor, fontSize: parseFloat(style.fontSize), cursor: style.cursor };
+}
+
+/** Text colour and the colour behind it: the nearest ancestor-or-self background that isn't transparent. */
+function effectiveLook(element: Element) {
+  const color = getComputedStyle(element).color;
+  for (let current: Element | null = element; current; current = current.parentElement) {
+    const background = getComputedStyle(current).backgroundColor;
+    if (background !== "rgba(0, 0, 0, 0)" && background !== "transparent") return { color, background };
+  }
+  return { color, background: "rgb(255, 255, 255)" };
 }
 
 /** WCAG contrast ratio between two opaque `rgb(…)` colours. */

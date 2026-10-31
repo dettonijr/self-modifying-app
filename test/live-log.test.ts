@@ -1,10 +1,13 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeAgent, Gate, type FakeAgentContext } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform } from "./support/harness.ts";
 
 interface LogEntry {
   time: string;
-  source: "claude" | "platform";
+  source: "claude" | "platform" | "thinking" | "tool";
   text: string;
 }
 
@@ -13,9 +16,9 @@ describe("A Run's live log", () => {
   afterEach(async () => {
     await Promise.all(platforms.splice(0).map((p) => p.close()));
   });
-  async function start() {
+  async function start(dataDir?: string) {
     const agent = new FakeAgent();
-    const platform = await startTestPlatform({ agent, maxParallelRuns: 1 });
+    const platform = await startTestPlatform({ agent, maxParallelRuns: 1, dataDir });
     platforms.push(platform);
     return { platform, agent };
   }
@@ -105,5 +108,47 @@ describe("A Run's live log", () => {
     const snapshot = await live2.waitFor((message) => message.type === "snapshot");
     for (const entry of [...snapshot.runs, ...live.messages.filter((m) => m.type === "run").map((m) => m.run)]) expect(entry).not.toHaveProperty("log");
     expect(await (await platform.consoleApi("/api/runs")).json()).toEqual([expect.not.objectContaining({ log: expect.anything() })]);
+  });
+
+  it("keeps Claude's thinking and tool calls, sends them live, and still has them after a restart", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "sma-log-"));
+    try {
+      const before = await start(dataDir);
+      const gate = new Gate();
+      before.agent.enqueue(async (run) => {
+        run.thinking("The Player wants snow.");
+        run.tool("Read index.html");
+        await gate.wait();
+        run.thinking("  ");
+        run.tool("Refused: Read /etc/hostname (outside the Canvas)");
+        await run.writeFile("features/snow/snow.js", "snow");
+      });
+      const live = await before.platform.live();
+
+      const run = await before.platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" });
+      const thought = await live.waitFor((message) => message.type === "log" && message.runId === run.id && message.entry.source === "thinking");
+      expect(thought.entry).toMatchObject({ source: "thinking", text: "The Player wants snow.", time: expect.any(String) });
+      const tool = await live.waitFor((message) => message.type === "log" && message.runId === run.id && message.entry.source === "tool");
+      expect(tool.entry).toMatchObject({ source: "tool", text: "Read index.html" });
+      gate.release();
+      await before.platform.waitForRun(run.id);
+      await before.platform.close();
+      platforms.splice(platforms.indexOf(before.platform), 1);
+
+      const after = await start(dataDir);
+      expect(lines(await logOf(after.platform, run.id))).toEqual([
+        "platform: Queued",
+        "platform: Started",
+        "thinking: The Player wants snow.",
+        "tool: Read index.html",
+        "tool: Refused: Read /etc/hostname (outside the Canvas)",
+        "platform: Rebasing onto the latest Canvas",
+        "platform: Checking that the Canvas renders",
+        "platform: Landed",
+      ]);
+    } finally {
+      await Promise.all(platforms.splice(0).map((p) => p.close()));
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 });

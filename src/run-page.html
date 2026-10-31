@@ -40,8 +40,27 @@
     .entries time { color: var(--color-text-muted); font-size: 0.8rem; font-variant-numeric: tabular-nums; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
     .entries .source { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; padding: 0.2em 0.5em; border-radius: 6px; border: 1px solid currentColor; color: var(--color-text-muted); }
     .entries [data-source="claude"] .source { color: var(--color-claude); }
+    .entries [data-source="tool"] .source { color: var(--color-info); }
     .entries .text { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
     .entries [data-source="platform"] .text { color: var(--color-text-muted); }
+    .entries [data-source="thinking"] .text { color: var(--color-text-muted); font-style: italic; }
+    .entries [data-source="tool"] .text { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.9rem; }
+    /* A thinking summary longer than one line shows its first line until tapped. */
+    .entries details.text summary { cursor: pointer; list-style: none; min-height: 44px; display: flex; align-items: center; gap: 0.4rem; }
+    .entries details.text summary::-webkit-details-marker { display: none; }
+    .entries details.text summary::before { content: "▸"; font-style: normal; }
+    .entries details.text[open] summary::before { content: "▾"; }
+    .entries details.text:not([open]) summary .first { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+    /* Filter chips: which sources the log shows. */
+    .filters { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.75rem; }
+    .filters button { background: var(--color-background-deep); border: 2px solid var(--color-border-strong); color: var(--color-text-muted); padding: 0.5rem 0.9rem; border-radius: 999px; }
+    .filters button[aria-pressed="true"] { background: var(--color-surface-raised); border-color: var(--color-accent); color: var(--color-text); }
+    .filters button[aria-pressed="true"]::before { content: "✓ " / ""; color: var(--color-accent); }
+    #log[data-hide~="platform"] li[data-source="platform"],
+    #log[data-hide~="claude"] li[data-source="claude"],
+    #log[data-hide~="thinking"] li[data-source="thinking"],
+    #log[data-hide~="tool"] li[data-source="tool"] { display: none; }
     @media (max-width: 30rem) {
       .entries li { grid-template-columns: auto 1fr; justify-items: start; }
       .entries .text { grid-column: 1 / -1; }
@@ -90,6 +109,7 @@
 
     <section id="log" class="card" data-testid="log">
       <h2>Log</h2>
+      <div class="filters" role="group" aria-label="Show in the log"></div>
       <div class="body"></div>
     </section>
 
@@ -102,7 +122,7 @@
   </main>
 
   <script type="module">
-    import { actionsFor, changeLabel, connectLive, detailsOf, runUrl, setStatus, span } from "/console-shared.js";
+    import { actionsFor, button, changeLabel, connectLive, detailsOf, runUrl, setStatus, span } from "/console-shared.js";
 
     const $ = (id) => document.getElementById(id);
     // The id from the URL: a Run id, or the commit of a Landed change.
@@ -142,7 +162,9 @@
 
     const entryKey = ({ time, source, text }) => JSON.stringify([time, source, text]);
 
-    /** One line of the log: its time, who it's from (Claude or the platform) and what was said or done. */
+    const SOURCE_LABELS = { platform: "Platform", claude: "Claude", thinking: "Thinking", tool: "Tool" };
+
+    /** One line of the log: its time, where it's from and what was said, thought or done. */
     function logEntry({ time, source, text }) {
       const item = document.createElement("li");
       item.dataset.source = source;
@@ -150,9 +172,61 @@
       when.dateTime = time;
       when.textContent = new Date(time).toLocaleTimeString();
       when.title = new Date(time).toLocaleString();
-      item.append(when, " ", span("source", source === "claude" ? "Claude" : "Platform"), " ", span("text", text));
+      item.append(when, " ", span("source", SOURCE_LABELS[source] ?? source), " ", source === "thinking" ? thinkingText(text) : span("text", text));
       return item;
     }
+
+    /** A thinking summary: shown whole if it's one short line, otherwise its first line, expanding on a tap. */
+    function thinkingText(text) {
+      const [first, ...rest] = text.split("\n");
+      if (rest.length === 0 && first.length <= 100) return span("text", text);
+      const details = document.createElement("details");
+      details.className = "text";
+      const summary = document.createElement("summary");
+      summary.append(span("first", first));
+      details.append(summary, rest.length ? span("more", "\n" + rest.join("\n")) : "");
+      return details;
+    }
+
+    /**
+     * The log's filter chips, one per source, all on unless this device
+     * turned some off. Hidden sources are set on the section, so CSS hides
+     * entries added live too.
+     */
+    const logFilters = {
+      key: "runLogHidden",
+      chips: [["platform", "Platform"], ["claude", "Claude"], ["thinking", "Thinking"], ["tool", "Tools"]],
+      hidden() {
+        try {
+          const saved = JSON.parse(localStorage.getItem(this.key) ?? "[]");
+          return new Set(Array.isArray(saved) ? saved : []);
+        } catch {
+          return new Set();
+        }
+      },
+      show(hidden) {
+        $("log").dataset.hide = [...hidden].join(" ");
+        for (const chip of $("log").querySelectorAll(".filters button")) chip.setAttribute("aria-pressed", String(!hidden.has(chip.dataset.source)));
+      },
+      start() {
+        const chips = this.chips.map(([source, label]) => {
+          const chip = button(label, () => {
+            const hidden = this.hidden();
+            if (hidden.has(source)) hidden.delete(source);
+            else hidden.add(source);
+            try {
+              localStorage.setItem(this.key, JSON.stringify([...hidden]));
+            } catch {}
+            this.show(hidden);
+          });
+          chip.dataset.source = source;
+          return chip;
+        });
+        $("log").querySelector(".filters").replaceChildren(...chips);
+        this.show(this.hidden());
+      },
+    };
+    logFilters.start();
 
     /**
      * The files the Run changed: names while it's in progress, updated live;
