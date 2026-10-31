@@ -14,6 +14,9 @@
     #history, #queue, #runs { list-style: none; padding: 0; }
     #history li, #queue li, #runs li { border-top: 1px solid #ddd; padding: 0.5rem 0; }
     #history time { color: #666; font-size: 0.85em; }
+    #history .actions { margin-top: 0.25rem; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    #history .confirm { background: #f4f4f4; padding: 0.25rem 0.5rem; border-radius: 0.25rem; }
+    .original { color: #666; font-size: 0.85em; }
     .state { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.1em 0.4em; border-radius: 0.3em; background: #eee; }
     .state.landed { background: #d7f5dd; }
     .state.rejected { background: #fbe0e3; }
@@ -172,6 +175,7 @@
       who.textContent = run.nickname;
       const prompt = document.createElement("q");
       prompt.textContent = run.prompt;
+      if (run.kind === "Replay") item.append("↻ ");
       item.append(who, ": ", prompt);
       return item;
     }
@@ -210,6 +214,9 @@
       );
     }
 
+    // The history entry whose "Fix it to this!" confirmation is open, kept across refreshes.
+    let confirmingReplay;
+
     async function refreshHistory() {
       const response = await fetch("/api/history");
       if (!response.ok) return;
@@ -224,10 +231,71 @@
           const time = document.createElement("time");
           time.dateTime = change.time;
           time.textContent = new Date(change.time).toLocaleString();
-          item.append(who, ": ", prompt, " ", time);
+          if (change.kind === "Replay" && change.original) {
+            const originalWho = document.createElement("strong");
+            originalWho.textContent = change.original.nickname;
+            const reference = document.createElement("code");
+            reference.className = "original";
+            reference.textContent = change.original.commit.slice(0, 7);
+            reference.title = `Replay of ${change.original.commit}`;
+            item.dataset.original = change.original.commit;
+            item.append("↻ ", who, " replayed ", originalWho, "'s ", prompt, " ", reference, " ", time);
+          } else {
+            item.append(who, ": ", prompt, " ", time);
+          }
+          const actions = document.createElement("div");
+          actions.className = "actions";
+          const fix = document.createElement("button");
+          fix.type = "button";
+          fix.textContent = "Fix it to this!";
+          fix.addEventListener("click", () => {
+            confirmingReplay = change.commit;
+            showReplayConfirmation(change, actions);
+          });
+          actions.append(fix);
+          if (confirmingReplay === change.commit) showReplayConfirmation(change, actions);
+          item.append(actions);
           return item;
         }),
       );
+    }
+
+    /** Asks before a Replay starts, and lets the Player pick its model. */
+    function showReplayConfirmation(change, actions) {
+      actions.querySelector(".confirm")?.remove();
+      const confirm = document.createElement("span");
+      confirm.className = "confirm";
+      const question = document.createElement("span");
+      question.textContent = `Replay ${change.nickname}'s Prompt on the current Canvas?`;
+      const model = $("model").cloneNode(true);
+      model.removeAttribute("id");
+      model.setAttribute("aria-label", "Replay model");
+      model.value = $("model").value;
+      const go = document.createElement("button");
+      go.type = "button";
+      go.textContent = "Replay";
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Cancel";
+      const close = () => {
+        confirmingReplay = undefined;
+        confirm.remove();
+      };
+      cancel.addEventListener("click", close);
+      go.addEventListener("click", async () => {
+        close();
+        const response = await fetch("/api/replays", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ commit: change.commit, model: model.value }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) return setStatus(body.error ?? "The Replay was refused", true);
+        myRuns.add(body.id);
+        setStatus(body.state === "waiting" ? "Your Replay is in the queue…" : "Claude is working on your Replay…");
+      });
+      confirm.append(question, " ", model, " ", go, " ", cancel);
+      actions.append(confirm);
     }
 
     const usd = (amount) => `$${amount.toFixed(2)}`;

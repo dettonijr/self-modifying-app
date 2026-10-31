@@ -3,9 +3,10 @@ import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
-import type { CanvasRepository, ChangeMetadata, Worktree } from "./canvas-repository.ts";
+import type { CanvasRepository, ChangeKind, ChangeMetadata, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
 import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
+import { replayInstructions } from "./replay.ts";
 import type { RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
@@ -41,6 +42,10 @@ export interface RunView {
   nickname: string;
   prompt: string;
   model: Model;
+  /** What kind of change the Run makes; a Player's own Prompt if absent. */
+  kind?: ChangeKind;
+  /** The earlier change a Replay re-applies; `prompt` is that change's Prompt. */
+  original?: OriginalChange;
   /** Why the Run was rejected. */
   error?: string;
   /** The commit that Landed. */
@@ -83,13 +88,20 @@ export interface PromptRequest {
   model?: unknown;
 }
 
+/** "Fix it to this!": send the Prompt of the change that Landed as `commit` again. */
+export interface ReplayRequest {
+  nickname: unknown;
+  commit: unknown;
+  model?: unknown;
+}
+
 export class PromptRefused extends Error {
   /**
    * `invalid`: the request breaks a rule. `already-waiting`: the Player already has a Prompt in the queue.
-   * `paused`: the spending cap is reached.
+   * `paused`: the spending cap is reached. `not-found`: no such change in the history.
    */
-  readonly reason: "invalid" | "already-waiting" | "paused";
-  constructor(reason: "invalid" | "already-waiting" | "paused", message: string) {
+  readonly reason: "invalid" | "already-waiting" | "paused" | "not-found";
+  constructor(reason: PromptRefused["reason"], message: string) {
     super(message);
     this.reason = reason;
   }
@@ -134,10 +146,39 @@ export class Runs {
   start(request: PromptRequest): RunView {
     if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
     const { nickname, prompt, model } = validate(request);
-    if (this.queue.some((waiting) => waiting.nickname === nickname)) {
+    return this.enqueue({ id: randomUUID(), state: "waiting", nickname, prompt, model, progress: [] });
+  }
+
+  /**
+   * Queues a Replay of a change in the history, or throws `PromptRefused`. It
+   * follows the same rules as a Prompt, including the one waiting slot.
+   */
+  async replay(request: ReplayRequest): Promise<RunView> {
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    const nickname = validNickname(request.nickname);
+    if (nickname === undefined) throw new PromptRefused("invalid", "Pick a nickname first");
+    const model = validModel(request.model);
+    const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
+    if (original === undefined) throw new PromptRefused("not-found", "There's no such change in the history");
+    // Checked again: the cap may have been reached while the history was read.
+    if (this.budget.spending().paused) throw new PromptRefused("paused", PAUSED_MESSAGE);
+    return this.enqueue({
+      id: randomUUID(),
+      state: "waiting",
+      nickname,
+      prompt: original.prompt,
+      model,
+      kind: "Replay",
+      original: { commit: original.commit, nickname: original.nickname },
+      progress: [],
+    });
+  }
+
+  /** Queues a new Run, unless its Player already has one waiting. */
+  private enqueue(run: RunView): RunView {
+    if (this.queue.some((waiting) => waiting.nickname === run.nickname)) {
       throw new PromptRefused("already-waiting", "You already have a Prompt waiting; you can send another once it starts running");
     }
-    const run: RunView = { id: randomUUID(), state: "waiting", nickname, prompt, model, progress: [] };
     this.runs.set(run.id, run);
     this.queue.push(run);
     this.store.save(run);
@@ -326,7 +367,7 @@ export class Runs {
 
   /** Lets the Agent do the Run's work in the worktree, then Lands it. */
   private async workOnce(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
-    const failure = await this.runAgent(run, worktree, signal, run.prompt, run.model);
+    const failure = await this.runAgent(run, worktree, signal, await this.instructions(run, worktree), run.model);
     if (failure !== undefined) return { landed: false, reason: failure };
     this.setState(run, "landing");
     return this.lander.land(worktree, this.change(run));
@@ -370,8 +411,22 @@ export class Runs {
     return !(await hasConflictMarkers(worktree.dir, conflicts));
   }
 
+  /**
+   * What the Agent is asked to do: the Prompt itself, or for a Replay, the
+   * original change and the Prompts that Landed since, as of the worktree's base.
+   */
+  private async instructions(run: RunView, worktree: Worktree): Promise<string> {
+    if (run.kind !== "Replay" || !run.original) return run.prompt;
+    const original = await this.repo.landedChange(run.original.commit);
+    if (!original) throw new Error(`The replayed change ${run.original.commit} is no longer in the history`);
+    const [diff, since] = await Promise.all([this.repo.diff(original.commit), this.repo.changesBetween(original.commit, worktree.base)]);
+    return replayInstructions({ original, diff, since });
+  }
+
   private change(run: RunView): ChangeMetadata {
-    return { kind: "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model };
+    const change: ChangeMetadata = { kind: run.kind ?? "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model };
+    if (run.original) change.original = run.original;
+    return change;
   }
 
   /** Lets the Agent work in the worktree; returns why it failed, if it did. */
@@ -407,9 +462,13 @@ function validate(request: PromptRequest): { nickname: string; prompt: string; m
   if (request.prompt.length > MAX_PROMPT_LENGTH) {
     throw new PromptRefused("invalid", `Prompts are limited to ${MAX_PROMPT_LENGTH} characters`);
   }
-  const model = request.model ?? DEFAULT_MODEL;
+  return { nickname, prompt: request.prompt.trim(), model: validModel(request.model) };
+}
+
+function validModel(value: unknown): Model {
+  const model = value ?? DEFAULT_MODEL;
   if (!MODELS.includes(model as Model)) throw new PromptRefused("invalid", `The model must be one of ${MODELS.join(", ")}`);
-  return { nickname, prompt: request.prompt.trim(), model: model as Model };
+  return model as Model;
 }
 
 /** A nickname is 1–40 characters on one line, with surrounding spaces trimmed. */

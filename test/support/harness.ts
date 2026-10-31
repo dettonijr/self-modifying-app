@@ -29,6 +29,8 @@ export interface TestPlatform {
   fetchCanvas(canvasPath: string, init?: RequestInit): Promise<Response>;
   /** Sends a Prompt as a Player would; throws unless the Console accepts it. */
   sendPrompt(prompt: { nickname: string; prompt: string; model?: string }): Promise<RunView>;
+  /** Replays a change from the history as a Player would ("Fix it to this!"); returns the raw response. */
+  replay(replay: { nickname: string; commit: string; model?: string }): Promise<Response>;
   /** Connects to the Console's live updates as a Console page would. Closed with the platform. */
   live(): Promise<LiveConsole>;
   /** Polls a Run until it has Landed or been rejected. */
@@ -89,6 +91,13 @@ export async function startTestPlatform(options: TestPlatformOptions = {}): Prom
       });
       if (response.status !== 202) throw new Error(`Prompt refused (${response.status}): ${await response.text()}`);
       return (await response.json()) as RunView;
+    },
+    replay({ nickname, ...body }) {
+      return consoleApi("/api/replays", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: `nickname=${encodeURIComponent(nickname)}` },
+        body: JSON.stringify(body),
+      });
     },
     async live() {
       const live = await connectLive(consoleUrl.replace(/^http/, "ws") + "/api/live");

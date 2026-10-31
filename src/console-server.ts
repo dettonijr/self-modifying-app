@@ -8,7 +8,7 @@ import { isCrossOrigin, readJson, sendJson } from "./http.ts";
 import { PromptRefused, type Runs } from "./runs.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
-const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503 };
+const REFUSAL_STATUS: Record<PromptRefused["reason"], number> = { invalid: 400, "already-waiting": 409, paused: 503, "not-found": 404 };
 
 /**
  * Serves the Console UI and the Console API, including `/api/live`: a
@@ -35,6 +35,17 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
         if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
         try {
           const run = runs.start({ nickname: cookie(req, "nickname"), prompt: body.prompt, model: body.model });
+          return sendJson(res, 202, run);
+        } catch (error) {
+          if (!(error instanceof PromptRefused)) throw error;
+          return sendJson(res, REFUSAL_STATUS[error.reason], { error: error.message });
+        }
+      }
+      if (url.pathname === "/api/replays" && req.method === "POST") {
+        const body = await readJson(req);
+        if (body === undefined) return sendJson(res, 400, { error: "Expected a JSON body" });
+        try {
+          const run = await runs.replay({ nickname: cookie(req, "nickname"), commit: body.commit, model: body.model });
           return sendJson(res, 202, run);
         } catch (error) {
           if (!(error instanceof PromptRefused)) throw error;

@@ -4,12 +4,25 @@ import { fileURLToPath } from "node:url";
 import type { Model } from "./agent.ts";
 import { git, gitBytes, GitError } from "./git.ts";
 
+/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again ("Fix it to this!"). */
+export const CHANGE_KINDS = ["Prompt", "Replay"] as const;
+export type ChangeKind = (typeof CHANGE_KINDS)[number];
+
 /** What every commit on `main` records about the change (besides the Starter Canvas). */
 export interface ChangeMetadata {
-  kind: "Prompt";
+  kind: ChangeKind;
+  /** Who made the change: for a Replay, the Player who replayed it. */
   nickname: string;
   prompt: string;
   model: Model;
+  /** The change a Replay re-applies, and who made it. */
+  original?: OriginalChange;
+}
+
+/** A reference to an earlier change on `main`, kept as `Original` and `Original-Nickname` trailers. */
+export interface OriginalChange {
+  commit: string;
+  nickname: string;
 }
 
 /** A change that Landed, as listed in the history. */
@@ -158,22 +171,42 @@ export class CanvasRepository {
     return (await this.changes([`${from}..${to}`, ...(paths ? ["--", ...paths] : [])])).reverse();
   }
 
+  /** The change that Landed as `commit`, if it's on `main`. */
+  async landedChange(commit: string): Promise<LandedChange | undefined> {
+    if (!/^[0-9a-f]{40}$/.test(commit)) return undefined;
+    try {
+      await git(this.dir, ["merge-base", "--is-ancestor", commit, "main"]);
+    } catch (error) {
+      if (error instanceof GitError) return undefined;
+      throw error;
+    }
+    return (await this.changes(["-1", commit]))[0];
+  }
+
+  /** What `commit` changed, as a unified diff. */
+  diff(commit: string): Promise<string> {
+    return git(this.dir, ["show", "--format=", "--no-color", commit]);
+  }
+
   /** The changes `git log <args>` lists, newest first. */
   private async changes(args: string[]): Promise<LandedChange[]> {
-    const fields = ["%H", "%cI", "%(trailers:key=Kind,valueonly)", "%(trailers:key=Nickname,valueonly)", "%(trailers:key=Model,valueonly)", "%B"];
+    const trailers = ["Kind", "Nickname", "Model", "Original", "Original-Nickname"].map((key) => `%(trailers:key=${key},valueonly)`);
+    const fields = ["%H", "%cI", ...trailers, "%B"];
     const log = await git(this.dir, ["log", `--format=${fields.join("%x1f")}%x1e`, ...args]);
     const changes: LandedChange[] = [];
     for (const entry of log.split("\x1e")) {
-      const [commit, time, kind, nickname, model, message] = entry.trim().split("\x1f");
-      if (!commit || kind?.trim() !== "Prompt") continue;
-      changes.push({
+      const [commit, time, kind, nickname, model, original, originalNickname, message] = entry.trim().split("\x1f");
+      if (!commit || !CHANGE_KINDS.includes(kind?.trim() as ChangeKind)) continue;
+      const change: LandedChange = {
         commit,
         time,
-        kind: "Prompt",
+        kind: kind.trim() as ChangeKind,
         nickname: nickname.trim(),
         model: model.trim() as Model,
         prompt: promptFromMessage(message),
-      });
+      };
+      if (original.trim() !== "") change.original = { commit: original.trim(), nickname: originalNickname.trim() };
+      changes.push(change);
     }
     return changes;
   }
@@ -199,7 +232,12 @@ function commitMessage(change: ChangeMetadata): string {
   return [
     `${change.kind} by ${change.nickname}: ${summary}`,
     change.prompt,
-    [`Kind: ${change.kind}`, `Nickname: ${change.nickname}`, `Model: ${change.model}`].join("\n"),
+    [
+      `Kind: ${change.kind}`,
+      `Nickname: ${change.nickname}`,
+      `Model: ${change.model}`,
+      ...(change.original ? [`Original: ${change.original.commit}`, `Original-Nickname: ${change.original.nickname}`] : []),
+    ].join("\n"),
   ].join("\n\n") + "\n";
 }
 

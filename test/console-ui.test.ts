@@ -196,6 +196,33 @@ describe("Console UI", () => {
     await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/landed/i);
   });
 
+  it("replays a change from the history after a confirmation, with the picked model, and credits the replayer", async () => {
+    const { page, platform, agent } = await join(await open());
+    agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing</h1>"));
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
+    const original = page.getByTestId("history").locator("li", { hasText: "make it snow" });
+    await expect.poll(() => original.count(), { timeout: 10_000 }).toBe(1);
+
+    await original.getByRole("button", { name: "Fix it to this!" }).click();
+    expect(await original.getByRole("button", { name: "Replay" }).isVisible()).toBe(true);
+    await original.getByRole("button", { name: "Cancel" }).click();
+    expect(await original.getByRole("button", { name: "Replay" }).count()).toBe(0);
+    expect(agent.tasks).toHaveLength(1);
+
+    agent.enqueue((run) => run.writeFile("index.html", "<h1>Snowing again</h1>"));
+    await original.getByRole("button", { name: "Fix it to this!" }).click();
+    await original.getByLabel("Replay model").selectOption("claude-opus-5-5");
+    await original.getByRole("button", { name: "Replay" }).click();
+
+    const entry = page.getByTestId("history").locator("li").first();
+    await expect.poll(() => entry.textContent(), { timeout: 10_000 }).toContain("↻ Alice replayed Bob's");
+    expect(await entry.textContent()).toContain("make it snow");
+    const [replayed, snow] = await (await platform.consoleApi("/api/history")).json();
+    expect(await entry.getAttribute("data-original")).toBe(snow.commit);
+    expect(replayed.kind).toBe("Replay");
+    expect(agent.tasks[1].model).toBe("claude-opus-5-5");
+  });
+
   it("tells the Player they already have a Prompt waiting", async () => {
     const { page, platform, agent } = await join(await open());
     const gate = new Gate();
