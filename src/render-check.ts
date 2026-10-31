@@ -1,4 +1,5 @@
 import { chromium, type Browser } from "playwright";
+import { CanvasChannel } from "./canvas-channel.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { createCanvasServer } from "./canvas-server.ts";
 import { close, listen } from "./http.ts";
@@ -24,13 +25,16 @@ export class RenderCheck {
   }
 
   async check(commit: string): Promise<RenderResult> {
-    // A private Canvas server for this one commit, on a random loopback port.
-    const server = createCanvasServer(this.repo, async () => commit);
+    // A private Canvas server on a random loopback port, with its own channel
+    // so the check never shows up as a viewer of the live Canvas.
+    const channel = new CanvasChannel({ greeting: async () => ({ type: "hello", commit, running: [] }) });
+    const server = createCanvasServer({ repo: this.repo, channel });
     const port = await listen(server, 0, "127.0.0.1");
     const context = await (await this.launch()).newContext();
     try {
       const page = await context.newPage();
-      const entryPage = `http://127.0.0.1:${port}/`;
+      // The candidate's entry page, pinned to its commit, as the Canvas server serves every page.
+      const entryPage = `http://127.0.0.1:${port}/@${commit}/`;
       const fatalErrors: string[] = [];
       await page.exposeFunction(REPORT_ERROR, (file: string, message: string) => {
         if (isEntryPage(file, entryPage)) fatalErrors.push(message);
@@ -67,8 +71,9 @@ const REPORT_ERROR = "__renderCheckReportError";
 /** Whether an error's source file is the entry page itself, i.e. one of its inline scripts. */
 function isEntryPage(file: string, entryPage: string): boolean {
   try {
-    const { origin, pathname } = new URL(file);
-    return origin === new URL(entryPage).origin && (pathname === "/" || pathname === "/index.html");
+    const url = new URL(file);
+    const entry = new URL(entryPage);
+    return url.origin === entry.origin && (url.pathname === entry.pathname || url.pathname === `${entry.pathname}index.html`);
   } catch {
     return false;
   }

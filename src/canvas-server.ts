@@ -1,39 +1,80 @@
-import { createServer, type Server } from "node:http";
+import { readFileSync } from "node:fs";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
+import type { CanvasChannel } from "./canvas-channel.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
 import { contentType } from "./http.ts";
 
+/** URL paths under this prefix belong to the platform; Canvas files there are never served. */
+const PLATFORM_PREFIX = "/__platform/";
+const PLATFORM_SCRIPT = readFileSync(new URL("./canvas-platform-script.js", import.meta.url), "utf8");
+const PLATFORM_SCRIPT_TAG = `<script src="${PLATFORM_PREFIX}platform.js"></script>`;
+/** `/@<commit>/<path>`: a file as it is at one commit. */
+const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
+
 /**
- * Serves the Canvas straight from the commit `main` points to, or from the
- * commit `commit` picks, e.g. a candidate the render check loads.
+ * Serves the Canvas from git. A page's live URL redirects to the same page at
+ * the commit `main` points to, `/@<commit>/…`, so everything the page loads by
+ * relative URL comes from that one commit: never a mix of versions, and never
+ * stale, because a new commit means new URLs.
  */
-export function createCanvasServer(repo: CanvasRepository, commit: () => Promise<string> = () => repo.main()): Server {
+export function createCanvasServer(options: { repo: CanvasRepository; channel: CanvasChannel }): Server {
+  const { repo, channel } = options;
   return createServer(async (req, res) => {
     try {
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405, { allow: "GET, HEAD" }).end();
         return;
       }
-      const filePath = toRepoPath(new URL(req.url ?? "/", "http://canvas").pathname);
+      const url = new URL(req.url ?? "/", "http://canvas");
+      if (url.pathname.startsWith(PLATFORM_PREFIX)) {
+        if (url.pathname === `${PLATFORM_PREFIX}platform.js`) {
+          return send(res, req.method, url.pathname, PLATFORM_SCRIPT, "no-cache");
+        }
+        if (url.pathname === `${PLATFORM_PREFIX}events` && req.method === "GET") return await channel.connect(req, res);
+        res.writeHead(404).end("Not found");
+        return;
+      }
+      const pinned = PINNED_PATH.exec(url.pathname);
+      const filePath = toRepoPath(pinned ? pinned[2] : url.pathname);
       if (filePath === undefined) {
         res.writeHead(404).end("Not found");
         return;
       }
-      const served = await commit();
-      const candidates = filePath === "" ? ["index.html"] : [filePath, `${filePath}/index.html`];
-      for (const candidate of candidates) {
-        const body = await repo.readFile(served, candidate);
-        if (body === undefined) continue;
-        res.writeHead(200, { "content-type": contentType(candidate), "cache-control": "no-cache" });
-        res.end(req.method === "HEAD" ? undefined : body);
+      const commit = pinned ? pinned[1] : await repo.main();
+      const file = await findFile(repo, commit, filePath);
+      if (file === undefined) {
+        res.writeHead(404).end("Not found");
         return;
       }
-      res.writeHead(404).end("Not found");
+      const isPage = file.path.endsWith(".html");
+      if (!pinned && isPage) {
+        res.writeHead(302, { location: `/@${commit}${url.pathname}${url.search}`, "cache-control": "no-store" }).end();
+        return;
+      }
+      if (isPage) return send(res, req.method, file.path, injectPlatform(file.body.toString("utf8")), "no-cache");
+      // A commit's files never change; files at live URLs change whenever main moves.
+      send(res, req.method, file.path, file.body, pinned ? "public, max-age=31536000, immutable" : "no-cache");
     } catch (error) {
       console.error("Canvas server error", error);
-      res.writeHead(500).end("Internal error");
+      if (!res.headersSent) res.writeHead(500);
+      res.end("Internal error");
     }
   });
+}
+
+async function findFile(repo: CanvasRepository, commit: string, filePath: string): Promise<{ path: string; body: Buffer } | undefined> {
+  const candidates = filePath === "" ? ["index.html"] : [filePath, `${filePath}/index.html`];
+  for (const candidate of candidates) {
+    const body = await repo.readFile(commit, candidate);
+    if (body !== undefined) return { path: candidate, body };
+  }
+  return undefined;
+}
+
+function send(res: ServerResponse, method: string, filePath: string, body: string | Buffer, cacheControl: string): void {
+  res.writeHead(200, { "content-type": contentType(filePath), "cache-control": cacheControl });
+  res.end(method === "HEAD" ? undefined : body);
 }
 
 /** Maps a URL path to a path inside the repo, or `undefined` if it escapes the repo. */
@@ -46,4 +87,14 @@ function toRepoPath(urlPath: string): string | undefined {
   }
   if (decoded.includes("\0") || decoded.split("/").includes("..")) return undefined;
   return path.posix.normalize(decoded).replace(/^\/+|\/+$/g, "").replace(/^\.$/, "");
+}
+
+/**
+ * Adds the platform script to a page: inside `<head>` if there is one, else
+ * after the doctype, else at the very start.
+ */
+function injectPlatform(html: string): string {
+  const anchor = /<head(\s[^>]*)?>/i.exec(html) ?? /^\s*<!doctype[^>]*>/i.exec(html);
+  const at = anchor ? anchor.index + anchor[0].length : 0;
+  return html.slice(0, at) + PLATFORM_SCRIPT_TAG + html.slice(at);
 }

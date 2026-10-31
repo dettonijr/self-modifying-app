@@ -17,8 +17,8 @@ describe("Test harness", () => {
       await writeFile(path.join(a.canvasRepoDir, "index.html"), "only in a");
       execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "commit", "-qam", "a"], { cwd: a.canvasRepoDir });
 
-      expect(await (await a.fetchCanvas("/")).text()).toBe("only in a");
-      expect(await (await b.fetchCanvas("/")).text()).not.toBe("only in a");
+      expect(await (await a.fetchCanvas("/")).text()).toContain("only in a");
+      expect(await (await b.fetchCanvas("/")).text()).not.toContain("only in a");
       expect((await a.consoleApi("/api/health")).status).toBe(200);
     } finally {
       await Promise.all([a.close(), b.close()]);

@@ -86,7 +86,7 @@ describe("Console UI", () => {
     expect(await entry.textContent()).toContain("Alice");
     expect(await entry.locator("time").getAttribute("datetime")).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(agent.tasks[0].model).toBe("claude-opus-5-5");
-    expect(await (await platform.fetchCanvas("/")).text()).toBe("<h1>Snowing</h1>");
+    expect(await (await platform.fetchCanvas("/")).text()).toContain("<h1>Snowing</h1>");
   });
 
   it("shows the running cost live to everyone, and the paused state once the spending cap is reached", async () => {
