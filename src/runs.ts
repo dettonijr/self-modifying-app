@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
 import type { CanvasRepository, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
+import type { RunStore } from "./run-store.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
 export const MAX_NICKNAME_LENGTH = 40;
@@ -91,13 +93,15 @@ export class PromptRefused extends Error {
  * Turns Prompts into Runs and drives each Run's lifecycle: a worktree branched
  * from `main`, the Agent editing it, then the Lander. The worktree is removed
  * whatever happens. Prompts wait in a queue, oldest first, until one of the
- * `maxParallelRuns` slots is free.
+ * `maxParallelRuns` slots is free. Every Run is saved in the `RunStore`, and
+ * `resume()` picks up where the last platform left off.
  */
 export class Runs {
   private readonly repo: CanvasRepository;
   private readonly agent: Agent;
   private readonly lander: Lander;
   private readonly budget: Budget;
+  private readonly store: RunStore;
   private readonly worktreesDir: string;
   private readonly maxParallelRuns: number;
   private readonly runs = new Map<string, RunView>();
@@ -110,11 +114,12 @@ export class Runs {
   /** Set while waiting Prompts are held by the spending cap. */
   private pausedRecheck: NodeJS.Timeout | undefined;
 
-  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; worktreesDir: string; maxParallelRuns?: number }) {
+  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; store: RunStore; worktreesDir: string; maxParallelRuns?: number }) {
     this.repo = options.repo;
     this.agent = options.agent;
     this.lander = options.lander;
     this.budget = options.budget;
+    this.store = options.store;
     this.worktreesDir = options.worktreesDir;
     this.maxParallelRuns = options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS;
   }
@@ -129,11 +134,34 @@ export class Runs {
     const run: RunView = { id: randomUUID(), state: "waiting", nickname, prompt, model, progress: [] };
     this.runs.set(run.id, run);
     this.queue.push(run);
+    this.store.save(run);
     const view = copy(run);
     this.publish({ type: "run", run: copy(run) });
     this.publishQueue();
     this.startWaitingRuns();
     return view;
+  }
+
+  /**
+   * Picks up the saved queue and Runs after a restart. Leftover worktrees are
+   * removed; Runs that were in progress start again from scratch on the latest
+   * `main` (they were already let in, so they don't wait for a slot or the
+   * spending cap); waiting Prompts are queued again in the same order.
+   */
+  async resume(): Promise<void> {
+    await this.removeLeftoverWorktrees();
+    for (const saved of this.store.recentlyFinished(MAX_RECENT_RUNS)) {
+      const run: RunView = { ...saved, progress: [] };
+      this.runs.set(run.id, run);
+      this.recent.push(run);
+    }
+    for (const saved of this.store.unfinished()) {
+      const run: RunView = { ...saved, progress: [] };
+      this.runs.set(run.id, run);
+      if (run.state === "waiting") this.queue.push(run);
+      else this.startRun(run);
+    }
+    this.startWaitingRuns();
   }
 
   get(id: string): RunView | undefined {
@@ -190,19 +218,30 @@ export class Runs {
     }
     let started = false;
     while (!this.closed && this.inProgress.size < this.maxParallelRuns && this.queue.length > 0) {
-      const run = this.queue.shift()!;
       started = true;
-      this.recent.push(run);
-      this.setState(run, "running");
-      const abort = new AbortController();
-      const done = this.execute(run, abort.signal);
-      this.inProgress.set(run.id, { abort, done });
+      this.startRun(this.queue.shift()!);
     }
     if (started) this.publishQueue();
   }
 
+  private startRun(run: RunView): void {
+    this.recent.push(run);
+    this.setState(run, "running");
+    const abort = new AbortController();
+    const done = this.execute(run, abort.signal);
+    this.inProgress.set(run.id, { abort, done });
+  }
+
+  /** Removes every Run worktree and `run/` branch, e.g. left by a platform that stopped mid-Run. */
+  private async removeLeftoverWorktrees(): Promise<void> {
+    const entries = await readdir(this.worktreesDir).catch(() => []);
+    for (const entry of entries) await rm(path.join(this.worktreesDir, entry), { recursive: true, force: true });
+    await this.repo.removeWorktreesAndBranches("run/");
+  }
+
   private setState(run: RunView, state: RunState): void {
     run.state = state;
+    this.store.save(run);
     this.publish({ type: "run", run: copy(run) });
   }
 
@@ -236,6 +275,8 @@ export class Runs {
     const outcome = await this.workAndLand(run, signal);
     // Only now, with the worktree gone, does the Run count as finished.
     this.inProgress.delete(run.id);
+    // Stopped by `close()`: it stays saved as in progress, so it starts again after a restart.
+    if (!outcome.landed && signal.aborted) return;
     if (outcome.landed) {
       run.commit = outcome.commit;
       this.setState(run, "landed");

@@ -9,6 +9,7 @@ import { close, listen } from "./http.ts";
 import { KeyValueStore } from "./key-value-store.ts";
 import { Lander } from "./lander.ts";
 import { RenderCheck } from "./render-check.ts";
+import { RunStore } from "./run-store.ts";
 import { Runs } from "./runs.ts";
 
 export interface PlatformOptions {
@@ -39,11 +40,13 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
 
   const budget = new Budget({ dataDir: options.dataDir, capUsd: options.spendingCapUsd });
   const renderCheck = new RenderCheck(repo);
+  const runStore = new RunStore(path.join(options.dataDir, "runs.sqlite"));
   const runs = new Runs({
     repo,
     agent: options.agent,
     lander: new Lander(repo, renderCheck),
     budget,
+    store: runStore,
     worktreesDir: path.join(options.dataDir, "worktrees"),
     maxParallelRuns: options.maxParallelRuns,
   });
@@ -65,6 +68,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
   });
   const store = new KeyValueStore(path.join(options.dataDir, "services.sqlite"));
   const canvasServer = createCanvasServer({ repo, channel, store });
+  await runs.resume();
   const consolePort = await listen(consoleServer, options.consolePort ?? 0, host);
   const canvasPort = await listen(canvasServer, options.canvasPort ?? 0, host);
 
@@ -76,6 +80,7 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
       await runs.close();
       await renderCheck.close();
       store.close();
+      runStore.close();
     },
   };
 }
