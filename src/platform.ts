@@ -21,6 +21,8 @@ export interface PlatformOptions {
   canvasPort?: number;
   /** Spending cap in US dollars; `DEFAULT_SPENDING_CAP_USD` if omitted. */
   spendingCapUsd?: number;
+  /** How many Runs may be in progress at once; `DEFAULT_MAX_PARALLEL_RUNS` if omitted. */
+  maxParallelRuns?: number;
 }
 
 export interface Platform {
@@ -36,7 +38,14 @@ export async function startPlatform(options: PlatformOptions): Promise<Platform>
 
   const budget = new Budget({ dataDir: options.dataDir, capUsd: options.spendingCapUsd });
   const renderCheck = new RenderCheck(repo);
-  const runs = new Runs({ repo, agent: options.agent, lander: new Lander(repo, renderCheck), budget, worktreesDir: path.join(options.dataDir, "worktrees") });
+  const runs = new Runs({
+    repo,
+    agent: options.agent,
+    lander: new Lander(repo, renderCheck),
+    budget,
+    worktreesDir: path.join(options.dataDir, "worktrees"),
+    maxParallelRuns: options.maxParallelRuns,
+  });
 
   const consoleServer = createConsoleServer({ runs, repo, budget });
   const channel = new CanvasChannel({

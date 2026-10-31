@@ -19,7 +19,7 @@ describe("Console UI", () => {
     agent = new FakeAgent(),
     options: TestPlatformOptions = {},
   ): Promise<{ page: Page; platform: TestPlatform; agent: FakeAgent }> {
-    const platform = await startTestPlatform({ agent, ...options });
+    const platform = await startTestPlatform({ agent, maxParallelRuns: 1, ...options });
     platforms.push(platform);
     const page = await (await browser.newContext()).newPage();
     await page.goto(platform.consoleUrl + "/");

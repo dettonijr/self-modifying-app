@@ -10,10 +10,19 @@ export const MAX_NICKNAME_LENGTH = 40;
 export const PAUSED_MESSAGE = "The Console is paused: the game has reached its spending cap. The host can raise it to continue.";
 
 /**
- * How many Runs may be in progress at once. Prompts beyond this wait in the
- * queue. The only place this limit lives (ticket 06 raises it).
+ * How many Runs may be in progress at once unless the host sets
+ * `MAX_PARALLEL_RUNS`. Prompts beyond the limit wait in the queue.
  */
-export const MAX_PARALLEL_RUNS = 1;
+export const DEFAULT_MAX_PARALLEL_RUNS = 3;
+
+/** Reads the parallel Run limit from `MAX_PARALLEL_RUNS`, a whole number of at least 1. */
+export function maxParallelRunsFromEnvironment(env: NodeJS.ProcessEnv = process.env): number {
+  const value = env.MAX_PARALLEL_RUNS;
+  if (value === undefined || value === "") return DEFAULT_MAX_PARALLEL_RUNS;
+  const limit = Number(value);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error(`MAX_PARALLEL_RUNS must be a whole number of at least 1, not "${value}"`);
+  return limit;
+}
 
 /** `waiting → running → landing → landed`, or `rejected` if the Agent fails or nothing Lands. */
 export type RunState = "waiting" | "running" | "landing" | "landed" | "rejected";
@@ -53,6 +62,11 @@ export interface RunsSnapshot {
 }
 
 const MAX_PROGRESS_EVENTS = 50;
+/**
+ * While the spending cap holds the queue, how often to check whether the host
+ * raised it. `raise-cap` only writes a file, so nothing tells the platform.
+ */
+const PAUSED_RECHECK_MS = 500;
 const MAX_RECENT_RUNS = 20;
 
 export interface PromptRequest {
@@ -77,7 +91,7 @@ export class PromptRefused extends Error {
  * Turns Prompts into Runs and drives each Run's lifecycle: a worktree branched
  * from `main`, the Agent editing it, then the Lander. The worktree is removed
  * whatever happens. Prompts wait in a queue, oldest first, until one of the
- * `MAX_PARALLEL_RUNS` slots is free.
+ * `maxParallelRuns` slots is free.
  */
 export class Runs {
   private readonly repo: CanvasRepository;
@@ -85,6 +99,7 @@ export class Runs {
   private readonly lander: Lander;
   private readonly budget: Budget;
   private readonly worktreesDir: string;
+  private readonly maxParallelRuns: number;
   private readonly runs = new Map<string, RunView>();
   private readonly queue: RunView[] = [];
   /** Runs that have left the queue, oldest first, capped at `MAX_RECENT_RUNS` finished ones. */
@@ -92,13 +107,16 @@ export class Runs {
   private readonly listeners = new Set<(event: RunsEvent) => void>();
   private closed = false;
   private readonly inProgress = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  /** Set while waiting Prompts are held by the spending cap. */
+  private pausedRecheck: NodeJS.Timeout | undefined;
 
-  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; worktreesDir: string }) {
+  constructor(options: { repo: CanvasRepository; agent: Agent; lander: Lander; budget: Budget; worktreesDir: string; maxParallelRuns?: number }) {
     this.repo = options.repo;
     this.agent = options.agent;
     this.lander = options.lander;
     this.budget = options.budget;
     this.worktreesDir = options.worktreesDir;
+    this.maxParallelRuns = options.maxParallelRuns ?? DEFAULT_MAX_PARALLEL_RUNS;
   }
 
   /** Validates a Prompt and queues its Run, or throws `PromptRefused`. Each Player (nickname) may have one Prompt waiting. */
@@ -148,15 +166,30 @@ export class Runs {
   /** Drops the queue, aborts Runs in progress and waits for them to clean up. */
   async close(): Promise<void> {
     this.closed = true;
+    clearTimeout(this.pausedRecheck);
     this.queue.length = 0;
     const all = [...this.inProgress.values()];
     for (const { abort } of all) abort.abort();
     await Promise.all(all.map(({ done }) => done));
   }
 
+  /**
+   * Starts waiting Prompts, oldest first, while slots are free. While the
+   * spending cap pauses the Console they stay waiting, and start once the
+   * host raises the cap.
+   */
   private startWaitingRuns(): void {
+    if (this.closed || this.queue.length === 0 || this.pausedRecheck !== undefined) return;
+    if (this.budget.spending().paused) {
+      this.pausedRecheck = setTimeout(() => {
+        this.pausedRecheck = undefined;
+        this.startWaitingRuns();
+      }, PAUSED_RECHECK_MS);
+      this.pausedRecheck.unref();
+      return;
+    }
     let started = false;
-    while (!this.closed && this.inProgress.size < MAX_PARALLEL_RUNS && this.queue.length > 0) {
+    while (!this.closed && this.inProgress.size < this.maxParallelRuns && this.queue.length > 0) {
       const run = this.queue.shift()!;
       started = true;
       this.recent.push(run);

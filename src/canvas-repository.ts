@@ -84,6 +84,22 @@ export class CanvasRepository {
     return git(worktree.dir, ["rev-parse", "HEAD"]);
   }
 
+  /**
+   * Rebases a worktree's commits onto `onto` and returns the new tip, or
+   * `undefined` if the rebase conflicts, in which case the worktree is left
+   * as it was.
+   */
+  async rebaseWorktree(worktree: Worktree, onto: string): Promise<string | undefined> {
+    try {
+      await git(worktree.dir, ["rebase", "--quiet", onto]);
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      await git(worktree.dir, ["rebase", "--abort"]).catch(() => undefined);
+      return undefined;
+    }
+    return git(worktree.dir, ["rev-parse", "HEAD"]);
+  }
+
   /** Moves `main` to `commit`, only if `main` is still at `expected`. */
   async moveMain(commit: string, expected: string): Promise<void> {
     await git(this.dir, ["update-ref", "refs/heads/main", commit, expected]);

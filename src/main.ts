@@ -1,6 +1,7 @@
 import { agentFromEnvironment } from "./claude-agent.ts";
 import { configuredCapUsd } from "./budget.ts";
 import { startPlatform } from "./platform.ts";
+import { maxParallelRunsFromEnvironment } from "./runs.ts";
 
 const platform = await startPlatform({
   dataDir: process.env.DATA_DIR ?? "./data",
@@ -9,6 +10,7 @@ const platform = await startPlatform({
   consolePort: Number(process.env.CONSOLE_PORT ?? 3000),
   canvasPort: Number(process.env.CANVAS_PORT ?? 3001),
   spendingCapUsd: configuredCapUsd(),
+  maxParallelRuns: maxParallelRunsFromEnvironment(),
 });
 
 console.log(`Console on port ${platform.consolePort}, Canvas on port ${platform.canvasPort}`);

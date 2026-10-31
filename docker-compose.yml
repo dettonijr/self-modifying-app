@@ -10,6 +10,7 @@ services:
       - ANTHROPIC_API_KEY
       - RUN_TIME_LIMIT_SECONDS
       - RUN_TOKEN_LIMIT
+      - MAX_PARALLEL_RUNS
     volumes:
       - data:/data
     restart: unless-stopped

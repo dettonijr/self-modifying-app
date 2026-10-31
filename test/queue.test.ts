@@ -9,7 +9,7 @@ describe("The queue", () => {
   });
   async function start() {
     const agent = new FakeAgent();
-    const platform = await startTestPlatform({ agent });
+    const platform = await startTestPlatform({ agent, maxParallelRuns: 1 });
     platforms.push(platform);
     return { platform, agent };
   }
@@ -84,7 +84,7 @@ describe("Live updates in the Console", () => {
 
   it("sends Console clients the queue, Run state changes and progress events as they happen", async () => {
     const agent = new FakeAgent();
-    const platform = await startTestPlatform({ agent });
+    const platform = await startTestPlatform({ agent, maxParallelRuns: 1 });
     platforms.push(platform);
     const live = await platform.live();
     expect(await live.waitFor((m) => m.type === "snapshot")).toMatchObject({ queue: [], runs: [] });
@@ -127,7 +127,7 @@ describe("Live updates in the Console", () => {
 
   it("tells Console clients why a Run failed or was rejected", async () => {
     const agent = new FakeAgent();
-    const platform = await startTestPlatform({ agent });
+    const platform = await startTestPlatform({ agent, maxParallelRuns: 1 });
     platforms.push(platform);
     const live = await platform.live();
     agent.enqueue(

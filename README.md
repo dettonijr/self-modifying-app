@@ -17,24 +17,24 @@ docker compose up --build
 
 Both listen on all interfaces, so other devices on the network can join. Set `CONSOLE_PORT` or `CANVAS_PORT` to change the published ports. The Canvas repo lives in the `data` volume. It's created with the starter Canvas (`starter-canvas/`) on first start and reused afterwards.
 
-Claude needs the host's Anthropic API key in `ANTHROPIC_API_KEY` (in the environment or an `.env` file next to `docker-compose.yml`). Without it every Run fails. The key is only handed to Claude's own process; it never goes into the Canvas or the Console. Each Run is stopped and rejected after `RUN_TIME_LIMIT_SECONDS` (default 600) or `RUN_TOKEN_LIMIT` tokens (default 2,000,000, counting input, cached input and output).
+Claude needs the host's Anthropic API key in `ANTHROPIC_API_KEY` (in the environment or an `.env` file next to `docker-compose.yml`). Without it every Run fails. The key is only handed to Claude's own process; it never goes into the Canvas or the Console. Each Run is stopped and rejected after `RUN_TIME_LIMIT_SECONDS` (default 600) or `RUN_TOKEN_LIMIT` tokens (default 2,000,000, counting input, cached input and output). Up to `MAX_PARALLEL_RUNS` Runs (default 3) work at once; further Prompts wait in the queue. Lowering it is the first thing to try if parallel Runs conflict too often; it takes effect on restart.
 
 ### Spending cap
 
-Every Run's token usage is converted to cost with the per-model prices in `src/budget.ts` and added to a running total, shown in the Console. When the total reaches the cap, the Console pauses: new Prompts are refused, and Runs already in progress finish. The cap is `SPENDING_CAP_USD` (default $10). To raise it while the platform runs:
+Every Run's token usage is converted to cost with the per-model prices in `src/budget.ts` and added to a running total, shown in the Console. When the total reaches the cap, the Console pauses: new Prompts are refused, waiting Prompts stay in the queue, and Runs already in progress finish. The cap is `SPENDING_CAP_USD` (default $10). To raise it while the platform runs:
 
 ```sh
 docker compose exec platform npm run raise-cap -- 20
 ```
 
-It can only go up, and the Console resumes at once. The total (`spending.json`) and the raised cap (`spending-cap.json`) live in the data volume, so both survive restarts.
+It can only go up, and the Console resumes at once (waiting Prompts start within a second). The total (`spending.json`) and the raised cap (`spending-cap.json`) live in the data volume, so both survive restarts.
 
 Without Docker you need Node 22.18 or later, which runs the TypeScript directly with no build step, and git: `npm install && npm start`. The data goes to `./data`.
 
 ## Layout
 
 - `src/`: the platform. `platform.ts` starts everything. The main pieces are the `canvas-repository.ts` git repo, the `canvas-server.ts` and `console-server.ts` servers (separate origins, the Console UI is `console-page.html`), and the `agent.ts` Agent interface. `claude-agent.ts` is the real Agent: Claude through the Claude Agent SDK, with only file tools (`Read`, `Write`, `Edit`, `Glob`, `Grep`) confined to the Run's worktree, no settings, hooks or MCP servers from disk, and the time and token caps. The Canvas server redirects pages to `/@<commit>/…` so a page and its files come from one commit, injects `canvas-platform-script.js` into every page, and streams platform events to viewers from `canvas-channel.ts` (Server-Sent Events at `/__platform/events`).
-- A Prompt becomes a Run in `runs.ts`: it validates the Prompt, queues it (one waiting Prompt per Player; `MAX_PARALLEL_RUNS` Runs at once), gives the Run a worktree branched from `main` (under `<data>/worktrees/`), lets the Agent edit it, hands it to the Lander and removes the worktree whatever happens. `lander.ts` commits the worktree and moves `main` to that commit, so the change is live. Every commit records its metadata as git trailers (`Kind`, `Nickname`, `Model`) after the Prompt text, and the history is read back from them.
+- A Prompt becomes a Run in `runs.ts`: it validates the Prompt, queues it (one waiting Prompt per Player; up to `maxParallelRuns` Runs at once), gives the Run a worktree branched from `main` (under `<data>/worktrees/`), lets the Agent edit it, hands it to the Lander and removes the worktree whatever happens. `lander.ts` Lands finished Runs one at a time, in the order they finish: it commits the worktree, rebases it onto the current `main` (a conflict rejects the Run), render-checks it and moves `main` to it, so the change is live. Every commit records its metadata as git trailers (`Kind`, `Nickname`, `Model`) after the Prompt text, and the history is read back from them.
 - The Console page follows the queue and Runs live over the `/api/live` WebSocket: a `snapshot` on connecting, then `queue`, `run` and `progress` messages (`RunsEvent` in `runs.ts`).
 - `budget.ts` records token usage, prices it and decides whether the Console is paused. `cli.ts` (logic in `host-commands.ts`) holds the host's commands, such as `raise-cap`.
 - `starter-canvas/`: what a new Canvas repo starts with, including the Canvas `CLAUDE.md` conventions for Claude.
