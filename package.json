@@ -1,0 +1,19 @@
+{
+  "name": "self-modifying-app",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "playwright": "^1.64.1",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

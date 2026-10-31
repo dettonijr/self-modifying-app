@@ -1,0 +1,9 @@
+#hello button {
+  background: var(--color-accent);
+  color: var(--color-surface);
+  border: none;
+  border-radius: var(--radius);
+  padding: calc(var(--space) / 2) var(--space);
+  font: inherit;
+  cursor: pointer;
+}

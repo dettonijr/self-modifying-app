@@ -1,0 +1,12 @@
+services:
+  platform:
+    build: .
+    ports:
+      - "${CONSOLE_PORT:-3000}:3000" # Console
+      - "${CANVAS_PORT:-3001}:3001" # Canvas
+    volumes:
+      - data:/data
+    restart: unless-stopped
+
+volumes:
+  data:

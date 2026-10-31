@@ -1,0 +1,36 @@
+/* Shared look of the Canvas. Features style themselves with these variables. */
+:root {
+  --color-background: #fdf6e3;
+  --color-text: #2b2b2b;
+  --color-accent: #e4572e;
+  --color-surface: #ffffff;
+  --font-body: system-ui, sans-serif;
+  --font-heading: Georgia, serif;
+  --radius: 12px;
+  --space: 1rem;
+}
+
+body {
+  margin: 0;
+  padding: calc(var(--space) * 2);
+  background: var(--color-background);
+  color: var(--color-text);
+  font-family: var(--font-body);
+}
+
+.title {
+  font-family: var(--font-heading);
+  color: var(--color-accent);
+}
+
+.features {
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+}
+
+.feature {
+  background: var(--color-surface);
+  border-radius: var(--radius);
+  padding: var(--space);
+}
