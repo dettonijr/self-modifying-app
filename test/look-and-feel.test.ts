@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -198,6 +199,33 @@ describe("Look and feel", () => {
     });
   }
 
+  for (const viewport of PHONES) {
+    it(`gives the older-version banner AA contrast and a 44px-tall link on a ${viewport.width}×${viewport.height} phone`, async () => {
+      const { platform, agent } = await start();
+      const old = mainCommit(platform);
+      agent.enqueue((run) => run.writeFile("features/hello/hello.js", 'document.body.append("Newer");'));
+      await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "newer" })).id);
+      const page = await newPage(platform, viewport);
+      await page.goto(`${platform.canvasUrl}/@${old}/?version`);
+      const banner = page.locator("platform-overlay p.version");
+      await banner.getByText("Older version: view only").waitFor();
+      await expect.poll(() => banner.evaluate((element) => getComputedStyle(element).color)).toBe(NIGHT_TEXT);
+
+      const text = await banner.evaluate(effectiveLook);
+      expect(contrast(text.color, text.background), `banner: ${text.color} on ${text.background}`).toBeGreaterThanOrEqual(4.5);
+      const link = banner.getByRole("link", { name: "Go to the live Canvas" });
+      const linkLook = await link.evaluate(effectiveLook);
+      expect(contrast(linkLook.color, linkLook.background), `link: ${linkLook.color} on ${linkLook.background}`).toBeGreaterThanOrEqual(4.5);
+      const box = (await link.boundingBox())!;
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      const bannerBox = (await banner.boundingBox())!;
+      expect(bannerBox.x).toBeGreaterThanOrEqual(0);
+      expect(bannerBox.x + bannerBox.width).toBeLessThanOrEqual(viewport.width);
+      await expectFitsPhone(page, "Older Canvas version");
+    });
+  }
+
   it("gives the starter Canvas its own copy of the Tokyo Night colours", () => {
     const theme = source("starter-canvas/theme.css");
     expect(theme).toMatch(/--color-background:\s*#1a1b26;/i);
@@ -206,6 +234,10 @@ describe("Look and feel", () => {
     expect(source("starter-canvas/index.html")).not.toMatch(/palette|__platform/);
   });
 });
+
+function mainCommit(platform: TestPlatform): string {
+  return execFileSync("git", ["rev-parse", "main"], { cwd: platform.canvasRepoDir, encoding: "utf8" }).trim();
+}
 
 async function expectFitsPhone(page: Page, what: string) {
   const width = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, viewport: window.innerWidth }));

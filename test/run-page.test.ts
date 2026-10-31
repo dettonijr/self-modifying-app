@@ -411,9 +411,10 @@ describe("The Run page", () => {
     expect(await diff.locator(".line.removed").allTextContents()).toEqual(["-two"]);
 
     const link = page.getByRole("link", { name: "View the Canvas at this version" });
-    expect(await link.getAttribute("href")).toBe(`${platform.canvasUrl}/@${run.commit}/`);
+    expect(await link.getAttribute("href")).toBe(`${platform.canvasUrl}/@${run.commit}/?version`);
     await link.click();
-    await page.waitForURL(`${platform.canvasUrl}/@${run.commit}/`);
+    await page.waitForURL(`${platform.canvasUrl}/@${run.commit}/?version`);
+    await page.getByText("Older version: view only · Go to the live Canvas").waitFor();
   });
 
   it("has no Canvas link while a Run isn't Landed", async () => {

@@ -13,6 +13,11 @@ function checkFeature(feature) {
   return feature;
 }
 
+// A pinned view of an older version (`/@<commit>/…?version`) is read-only: it
+// sees live data and messages, but writes and sends are quietly dropped, so
+// old code carries on as if they worked. The Canvas server refuses them too.
+const viewOnly = /^\/@[0-9a-f]{40}\//.test(location.pathname) && new URLSearchParams(location.search).has("version");
+
 // One event stream per page, shared with the platform script when it's there.
 let events;
 function eventStream() {
@@ -41,6 +46,7 @@ export function channel(feature) {
   const path = `/channel/${feature}`;
   return {
     async send(message) {
+      if (viewOnly) return;
       await call("POST", path, { message });
     },
     /** Calls `listener(message)` for each message; returns a function that stops listening. */
@@ -74,11 +80,15 @@ export function store(feature) {
       return response.status === 404 ? undefined : (await response.json()).value;
     },
     async set(key, value) {
+      const path = keyPath(key);
       if (value === undefined) throw new TypeError("Use delete() to remove a key");
-      await call("PUT", keyPath(key), { value });
+      if (viewOnly) return;
+      await call("PUT", path, { value });
     },
     async delete(key) {
-      await call("DELETE", keyPath(key));
+      const path = keyPath(key);
+      if (viewOnly) return;
+      await call("DELETE", path);
     },
     /** Every entry whose key starts with `prefix` (all of them by default), sorted by key: `[{ key, value }]`. */
     async list(prefix = "") {

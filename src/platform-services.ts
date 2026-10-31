@@ -19,18 +19,26 @@ const MAX_KEY_LENGTH = 256;
  *   (`{value}`) or removes one entry; `GET store/<feature>/?prefix=` lists
  *   `{entries: [{key, value}]}`.
  *
+ * Changes (anything but `GET`/`HEAD`) are refused with 403 when `isViewOnly`
+ * says the request comes from a view-only page, such as an older version.
+ *
  * Returns false if `servicePath` isn't a services path.
  */
 export async function handleServiceRequest(
   req: IncomingMessage,
   res: ServerResponse,
   servicePath: string,
-  services: { channel: CanvasChannel; store: KeyValueStore },
+  services: { channel: CanvasChannel; store: KeyValueStore; isViewOnly?: (req: IncomingMessage) => Promise<boolean> },
 ): Promise<boolean> {
   const match = /^(?:channel\/([^/]*)|store\/([^/]*)\/(.*))$/.exec(servicePath);
   if (!match) return false;
   if (isCrossOrigin(req)) {
     res.writeHead(403).end("The platform services only answer the Canvas");
+    return true;
+  }
+  if (req.method !== "GET" && req.method !== "HEAD" && (await services.isViewOnly?.(req))) {
+    console.warn(`Refused ${req.method} ${req.url} from an older Canvas version (${req.headers.referer})`);
+    res.writeHead(403).end("Older Canvas versions are view only");
     return true;
   }
   const feature = match[1] ?? match[2];

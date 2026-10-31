@@ -2,11 +2,15 @@
 // Claude can't edit it: it lives outside the Canvas repo. It listens to the
 // Canvas real-time channel for platform events: banners while Runs are in
 // progress, and a reload with a "changed by" notice when a change Lands.
+// A pinned view (`/@<commit>/…?version`, from "View the Canvas at this
+// version") instead stays on its version, read-only, under a fixed banner.
 (() => {
   const NOTICE_KEY = "__platform.notice";
   const NOTICE_MS = 6000;
   const pinned = /^\/@([0-9a-f]{40})(\/.*)$/.exec(location.pathname);
   const pageCommit = pinned?.[1];
+  const VERSION_MARKER = "version";
+  const viewOnly = pageCommit !== undefined && new URLSearchParams(location.search).has(VERSION_MARKER);
   // The page's live URL, which the Canvas server redirects to the newest commit.
   const liveUrl = () => (pinned ? pinned[2] : location.pathname) + location.search + location.hash;
 
@@ -22,6 +26,8 @@
     p { margin: 0; display: flex; align-items: center; gap: 0.6rem; max-width: min(32rem, 100%); padding: 0.6rem 1rem; border-radius: 14px; border: 1px solid var(--color-border-strong); background: var(--color-surface); color: var(--color-text); box-shadow: 0 6px 24px var(--color-shadow); overflow-wrap: anywhere; }
     p.banner::before { content: ""; flex: none; width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--color-accent); animation: pulse 1.2s ease-in-out infinite; }
     p.notice { border-color: var(--color-success); border-left-width: 5px; }
+    p.version { pointer-events: auto; flex-wrap: wrap; border-color: var(--color-warning); border-left-width: 5px; }
+    p.version a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.25rem; color: var(--color-accent); text-decoration: underline; }
     @keyframes pulse { 50% { opacity: 0.25; } }
     @media (prefers-reduced-motion: reduce) { p.banner::before { animation: none; } }
     @media (max-width: 30rem) { .overlay { justify-items: stretch; padding: 0.5rem; } p { max-width: none; } }
@@ -59,6 +65,27 @@
     location.replace(liveUrl());
   };
 
+  if (viewOnly) {
+    const banner = message("Older version: view only · ", "version");
+    const live = document.createElement("a");
+    live.href = "/";
+    live.textContent = "Go to the live Canvas";
+    banner.append(live);
+    // Links within this version keep the marker, so the view stays pinned as it's explored.
+    document.addEventListener(
+      "click",
+      (event) => {
+        const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
+        if (!link) return;
+        const url = new URL(link.href, location.href);
+        if (url.origin !== location.origin || !url.pathname.startsWith(`/@${pageCommit}/`) || url.searchParams.has(VERSION_MARKER)) return;
+        url.search += url.search ? `&${VERSION_MARKER}` : `?${VERSION_MARKER}`;
+        link.href = url.href;
+      },
+      true,
+    );
+  }
+
   const notice = sessionStorage.getItem(NOTICE_KEY);
   if (notice) {
     sessionStorage.removeItem(NOTICE_KEY);
@@ -71,6 +98,8 @@
   // The services library (/__platform/services.js) shares this stream rather than opening another.
   Object.defineProperty(window, "__platformEvents", { value: events });
   events.addEventListener("platform", (message) => {
+    // A pinned view doesn't follow the live Canvas.
+    if (viewOnly) return;
     const event = JSON.parse(message.data);
     if (event.type === "hello") {
       // A page from an older commit (a bookmark, or a Land missed while disconnected) catches up.

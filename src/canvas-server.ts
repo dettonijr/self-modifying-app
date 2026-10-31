@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import type { CanvasChannel } from "./canvas-channel.ts";
 import type { CanvasRepository } from "./canvas-repository.ts";
@@ -15,6 +15,8 @@ const PALETTE = readFileSync(new URL("./palette.css", import.meta.url), "utf8");
 const PLATFORM_SCRIPT_TAG = `<script src="${PLATFORM_PREFIX}platform.js"></script>`;
 /** `/@<commit>/<path>`: a file as it is at one commit. */
 const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
+/** The query parameter marking a pinned, view-only page, as in `/@<commit>/?version`. */
+const VERSION_MARKER = "version";
 
 /**
  * Serves the Canvas from git. A page's live URL redirects to the same page at
@@ -22,6 +24,11 @@ const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
  * relative URL comes from that one commit: never a mix of versions, and never
  * stale, because a new commit means new URLs. Only commits on `main` are
  * served, unless `anyCommit` is set, as for the render check's candidates.
+ *
+ * Pages from older versions are view only: the platform services refuse
+ * changes whose `Referer` is a pinned view (`/@<commit>/…?version`) or any
+ * page at a commit other than `main`'s. The render check (`anyCommit`) is
+ * exempt, since its candidates are never `main` and its store is private.
  */
 export function createCanvasServer(options: { repo: CanvasRepository; channel: CanvasChannel; store: KeyValueStore; anyCommit?: boolean }): Server {
   const { repo, channel, store } = options;
@@ -33,12 +40,23 @@ export function createCanvasServer(options: { repo: CanvasRepository; channel: C
     onMain.add(commit);
     return true;
   };
+  const isViewOnly = async (req: IncomingMessage): Promise<boolean> => {
+    let referer: URL;
+    try {
+      referer = new URL(req.headers.referer ?? "");
+    } catch {
+      return false;
+    }
+    const pinned = PINNED_PATH.exec(referer.pathname);
+    if (!pinned) return false;
+    return referer.searchParams.has(VERSION_MARKER) || pinned[1] !== (await repo.main());
+  };
   return createServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://canvas");
       if (url.pathname.startsWith(PLATFORM_PREFIX)) {
         const platformPath = url.pathname.slice(PLATFORM_PREFIX.length);
-        if (await handleServiceRequest(req, res, platformPath, { channel, store })) return;
+        if (await handleServiceRequest(req, res, platformPath, { channel, store, isViewOnly: options.anyCommit ? undefined : isViewOnly })) return;
         if (req.method !== "GET" && req.method !== "HEAD") {
           res.writeHead(405, { allow: "GET, HEAD" }).end();
           return;

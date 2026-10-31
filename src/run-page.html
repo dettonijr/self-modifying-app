@@ -297,7 +297,7 @@
       if (commit === undefined) return void (paragraph.hidden = true);
       canvasPort ??= await fetch("/api/canvas").then((response) => (response.ok ? response.json() : undefined)).then((canvas) => canvas?.port);
       if (canvasPort === undefined) return;
-      paragraph.querySelector("a").href = `${location.protocol}//${location.hostname}:${canvasPort}/@${commit}/`;
+      paragraph.querySelector("a").href = `${location.protocol}//${location.hostname}:${canvasPort}/@${commit}/?version`;
       paragraph.hidden = false;
     }
 
