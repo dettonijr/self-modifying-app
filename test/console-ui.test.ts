@@ -1,6 +1,6 @@
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { FakeAgent, Gate } from "./support/fake-agent.ts";
+import { FakeAgent, Gate, type FakeAgentContext } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform, type TestPlatformOptions } from "./support/harness.ts";
 
 describe("Console UI", () => {
@@ -121,7 +121,9 @@ describe("Console UI", () => {
 
   it("tells the Player why their Prompt didn't Land when the Canvas didn't render", async () => {
     const { page, agent } = await join(await open());
-    agent.enqueue((run) => run.writeFile("index.html", "<body></body>"));
+    // The Run, both resolution attempts and the restart all leave the page blank.
+    const blank = (run: FakeAgentContext) => run.writeFile("index.html", "<body></body>");
+    agent.enqueue(blank, blank, blank, blank);
 
     await page.getByLabel("Prompt").fill("blank it");
     await page.getByRole("button", { name: "Send" }).click();
@@ -161,6 +163,37 @@ describe("Console UI", () => {
     const rain = runs.locator("li", { hasText: "make it rain" });
     await expect.poll(() => rain.textContent(), { timeout: 10_000 }).toMatch(/rejected/i);
     expect(await rain.textContent()).toContain("Claude gave up");
+  });
+
+  it("shows a Run resolving, with the resolution's progress, and restarted", async () => {
+    const { page, agent } = await join(await open());
+    const resolving = new Gate();
+    const restarted = new Gate();
+    agent.enqueue(
+      (run) => run.writeFile("index.html", "<!doctype html><html><body></body></html>"),
+      async (run) => {
+        await run.writeFile("features/fix/fix.js", "fix");
+        await Promise.race([resolving.wait(), run.aborted()]);
+        throw new Error("couldn't fix it");
+      },
+      () => {
+        throw new Error("couldn't fix it either");
+      },
+      async (run) => {
+        await Promise.race([restarted.wait(), run.aborted()]);
+        await run.writeFile("index.html", "<h1>Fixed</h1>");
+      },
+    );
+
+    await page.getByLabel("Prompt").fill("break the page");
+    await page.getByRole("button", { name: "Send" }).click();
+    const run = page.getByTestId("runs").locator("li", { hasText: "break the page" });
+    await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/resolving/i);
+    await expect.poll(() => run.textContent()).toContain("features/fix/fix.js");
+    resolving.release();
+    await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/restarted/i);
+    restarted.release();
+    await expect.poll(() => run.textContent(), { timeout: 10_000 }).toMatch(/landed/i);
   });
 
   it("tells the Player they already have a Prompt waiting", async () => {

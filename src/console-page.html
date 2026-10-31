@@ -17,6 +17,7 @@
     .state { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.05em; padding: 0.1em 0.4em; border-radius: 0.3em; background: #eee; }
     .state.landed { background: #d7f5dd; }
     .state.rejected { background: #fbe0e3; }
+    .state.resolving, .state.restarted { background: #fdf0cf; }
     #runs .progress li { border: 0; padding: 0; }
     .progress { color: #555; font-size: 0.9em; margin: 0.25rem 0 0; padding-left: 1rem; }
     .empty { color: #666; }
@@ -159,6 +160,8 @@
 
     function showMyRun(run) {
       if (run.state === "running") setStatus("Claude is working on it…");
+      if (run.state === "resolving") setStatus("Your change couldn't Land as it was; Claude is fixing it…");
+      if (run.state === "restarted") setStatus("Your change couldn't be reconciled; Claude is starting over on the latest Canvas…");
       if (run.state === "landed") setStatus("Your change Landed!");
       if (run.state === "rejected") setStatus(`Your Prompt didn't Land: ${run.error}`, true);
     }
@@ -190,7 +193,7 @@
             reason.className = "error";
             reason.textContent = run.error;
             item.append(reason);
-          } else if (run.state === "running" || run.state === "landing") {
+          } else if (["running", "landing", "resolving", "restarted"].includes(run.state)) {
             const progress = document.createElement("ul");
             progress.className = "progress";
             progress.append(

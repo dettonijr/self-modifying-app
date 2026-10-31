@@ -23,6 +23,8 @@ export interface LandedChange extends ChangeMetadata {
 export interface Worktree {
   dir: string;
   branch: string;
+  /** The `main` commit it was branched from. */
+  base: string;
 }
 
 const STARTER_CANVAS = fileURLToPath(new URL("../starter-canvas", import.meta.url));
@@ -63,7 +65,7 @@ export class CanvasRepository {
   /** Creates a worktree at `dir` on a new branch `branch`, starting from the current `main`. */
   async createWorktree(dir: string, branch: string): Promise<Worktree> {
     await git(this.dir, ["worktree", "add", "--quiet", "-b", branch, dir, "main"]);
-    return { dir, branch };
+    return { dir, branch, base: await git(dir, ["rev-parse", "HEAD"]) };
   }
 
   /** Removes a worktree and its branch. Safe to call on one that's partly or fully gone. */
@@ -100,15 +102,52 @@ export class CanvasRepository {
     return git(worktree.dir, ["rev-parse", "HEAD"]);
   }
 
+  /** The commit a worktree is at. */
+  head(worktree: Worktree): Promise<string> {
+    return git(worktree.dir, ["rev-parse", "HEAD"]);
+  }
+
+  /**
+   * Resets a worktree to `onto` and reapplies `change` (a single commit) as
+   * uncommitted edits, so that committing again gives one commit on `onto`.
+   * Returns the paths that conflict, which are left with git's conflict
+   * markers in them.
+   */
+  async reopenOnto(worktree: Worktree, change: string, onto: string): Promise<string[]> {
+    await git(worktree.dir, ["reset", "--quiet", "--hard", onto]);
+    try {
+      await git(worktree.dir, ["cherry-pick", "--no-commit", change]);
+      return [];
+    } catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      const conflicts = await git(worktree.dir, ["diff", "--name-only", "--diff-filter=U"]);
+      await git(worktree.dir, ["cherry-pick", "--quit"]);
+      return conflicts === "" ? [] : conflicts.split("\n");
+    }
+  }
+
   /** Moves `main` to `commit`, only if `main` is still at `expected`. */
   async moveMain(commit: string, expected: string): Promise<void> {
     await git(this.dir, ["update-ref", "refs/heads/main", commit, expected]);
   }
 
   /** Every change that Landed on `main`, newest first. */
-  async history(): Promise<LandedChange[]> {
+  history(): Promise<LandedChange[]> {
+    return this.changes(["main"]);
+  }
+
+  /**
+   * The changes after `from` up to and including `to`, oldest first; only
+   * those touching `paths`, if given.
+   */
+  async changesBetween(from: string, to: string, paths?: string[]): Promise<LandedChange[]> {
+    return (await this.changes([`${from}..${to}`, ...(paths ? ["--", ...paths] : [])])).reverse();
+  }
+
+  /** The changes `git log <args>` lists, newest first. */
+  private async changes(args: string[]): Promise<LandedChange[]> {
     const fields = ["%H", "%cI", "%(trailers:key=Kind,valueonly)", "%(trailers:key=Nickname,valueonly)", "%(trailers:key=Model,valueonly)", "%B"];
-    const log = await git(this.dir, ["log", "main", `--format=${fields.join("%x1f")}%x1e`]);
+    const log = await git(this.dir, ["log", `--format=${fields.join("%x1f")}%x1e`, ...args]);
     const changes: LandedChange[] = [];
     for (const entry of log.split("\x1e")) {
       const [commit, time, kind, nickname, model, message] = entry.trim().split("\x1f");

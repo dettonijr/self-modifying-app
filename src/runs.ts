@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DEFAULT_MODEL, MODELS, type Agent, type Model } from "./agent.ts";
 import type { Budget } from "./budget.ts";
-import type { CanvasRepository, Worktree } from "./canvas-repository.ts";
+import type { CanvasRepository, ChangeMetadata, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult } from "./lander.ts";
+import { COLLIDED_MESSAGE, hasConflictMarkers, MAX_RESOLUTION_ATTEMPTS, RESOLUTION_MODEL, resolutionInstructions, type ResolutionProblem } from "./resolution.ts";
 
 export const MAX_PROMPT_LENGTH = 500;
 export const MAX_NICKNAME_LENGTH = 40;
@@ -24,8 +25,13 @@ export function maxParallelRunsFromEnvironment(env: NodeJS.ProcessEnv = process.
   return limit;
 }
 
-/** `waiting → running → landing → landed`, or `rejected` if the Agent fails or nothing Lands. */
-export type RunState = "waiting" | "running" | "landing" | "landed" | "rejected";
+/**
+ * `waiting → running → landing → landed`. If Landing conflicts or fails the
+ * render check, the Run goes `resolving → landing` up to twice, then
+ * `restarted → landing` once. It ends `rejected` if the Agent fails, nothing
+ * Lands, or the restart fails too.
+ */
+export type RunState = "waiting" | "running" | "landing" | "resolving" | "restarted" | "landed" | "rejected";
 
 export interface RunView {
   id: string;
@@ -247,28 +253,91 @@ export class Runs {
     this.startWaitingRuns();
   }
 
-  /** Lets the Agent edit a fresh worktree, Lands the result and removes the worktree, whatever happens. */
+  /**
+   * Works on the Run and Lands it. A change that conflicts or fails the
+   * render check is resolved by the Agent (up to `MAX_RESOLUTION_ATTEMPTS`),
+   * then started over once from the latest `main`, then rejected.
+   */
   private async workAndLand(run: RunView, signal: AbortSignal): Promise<LandResult> {
-    let worktree: Worktree | undefined;
     try {
-      worktree = await this.repo.createWorktree(path.join(this.worktreesDir, run.id), `run/${run.id}`);
-      const failure = await this.runAgent(run, worktree, signal);
-      if (failure !== undefined) return { landed: false, reason: failure };
-      this.setState(run, "landing");
-      return await this.lander.land(worktree, { kind: "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model });
+      const first = await this.inWorktree(run, (worktree) => this.workAndResolve(run, worktree, signal));
+      if (first.landed || !needsResolving(first) || signal.aborted) return first;
+      this.setState(run, "restarted");
+      const restart = await this.inWorktree(run, (worktree) => this.workOnce(run, worktree, signal));
+      if (restart.landed || restart.failure !== "conflict") return restart;
+      return { ...restart, reason: COLLIDED_MESSAGE };
     } catch (error) {
       console.error(`Run ${run.id} failed`, error);
       return { landed: false, reason: "Something went wrong on the platform" };
+    }
+  }
+
+  /** Runs `work` in a fresh worktree branched from `main`, and removes the worktree whatever happens. */
+  private async inWorktree(run: RunView, work: (worktree: Worktree) => Promise<LandResult>): Promise<LandResult> {
+    let worktree: Worktree | undefined;
+    try {
+      worktree = await this.repo.createWorktree(path.join(this.worktreesDir, run.id), `run/${run.id}`);
+      return await work(worktree);
     } finally {
       if (worktree) await this.repo.removeWorktree(worktree).catch((error) => console.error("Couldn't remove a worktree", error));
     }
   }
 
+  /** Lets the Agent do the Run's work in the worktree, then Lands it. */
+  private async workOnce(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
+    const failure = await this.runAgent(run, worktree, signal, run.prompt, run.model);
+    if (failure !== undefined) return { landed: false, reason: failure };
+    this.setState(run, "landing");
+    return this.lander.land(worktree, this.change(run));
+  }
+
+  /** `workOnce`, then up to `MAX_RESOLUTION_ATTEMPTS` resolutions if the change conflicts or doesn't render. */
+  private async workAndResolve(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
+    let result = await this.workOnce(run, worktree, signal);
+    // The committed change to resolve; a failed resolution leaves the worktree in a mess, so it's kept.
+    let change = await this.repo.head(worktree);
+    for (let attempt = 0; attempt < MAX_RESOLUTION_ATTEMPTS && needsResolving(result) && !signal.aborted; attempt++) {
+      this.setState(run, "resolving");
+      if (!(await this.resolve(run, worktree, change, result, signal))) continue;
+      this.setState(run, "landing");
+      result = await this.lander.land(worktree, this.change(run));
+      if (!result.landed) change = await this.repo.head(worktree);
+    }
+    return result;
+  }
+
+  /**
+   * Reapplies `change` onto the latest `main` and asks the Agent to fix the
+   * conflict or render failure, given the Run's Prompt and the Prompts of the
+   * changes it collided with. Returns whether the Agent succeeded and left no
+   * conflict markers; the fixed change is left uncommitted for the Lander.
+   */
+  private async resolve(run: RunView, worktree: Worktree, change: string, failed: LandResult & { landed: false }, signal: AbortSignal): Promise<boolean> {
+    const onto = await this.repo.main();
+    const conflicts = await this.repo.reopenOnto(worktree, change, onto);
+    let problem: ResolutionProblem;
+    if (failed.failure === "conflict") {
+      // Main moved on and the change now applies cleanly: nothing for the Agent to do.
+      if (conflicts.length === 0) return true;
+      problem = { kind: "conflict", files: conflicts };
+    } else {
+      problem = { kind: "render", problem: failed.problem ?? "unknown" };
+    }
+    const collided = await this.repo.changesBetween(worktree.base, onto, problem.kind === "conflict" ? conflicts : undefined);
+    const instructions = resolutionInstructions({ prompt: run.prompt, problem, collided });
+    if ((await this.runAgent(run, worktree, signal, instructions, RESOLUTION_MODEL)) !== undefined) return false;
+    return !(await hasConflictMarkers(worktree.dir, conflicts));
+  }
+
+  private change(run: RunView): ChangeMetadata {
+    return { kind: "Prompt", nickname: run.nickname, prompt: run.prompt, model: run.model };
+  }
+
   /** Lets the Agent work in the worktree; returns why it failed, if it did. */
-  private async runAgent(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<string | undefined> {
-    const events = this.agent.run({ worktree: worktree.dir, instructions: run.prompt, model: run.model, signal });
+  private async runAgent(run: RunView, worktree: Worktree, signal: AbortSignal, instructions: string, model: Model): Promise<string | undefined> {
+    const events = this.agent.run({ worktree: worktree.dir, instructions, model, signal });
     for await (const event of events) {
-      if (event.type === "usage") this.budget.record(run.model, event.usage);
+      if (event.type === "usage") this.budget.record(model, event.usage);
       if (event.type === "progress") {
         const progress: RunProgress = event.file === undefined ? { message: event.message } : { message: event.message, file: event.file };
         run.progress.push(progress);
@@ -279,6 +348,11 @@ export class Runs {
     }
     return "The Agent stopped without a result";
   }
+}
+
+/** Whether a failed Land is one the Agent may be able to fix. */
+function needsResolving(result: LandResult): result is LandResult & { landed: false } {
+  return !result.landed && (result.failure === "conflict" || result.failure === "render");
 }
 
 function copy(run: RunView): RunView {

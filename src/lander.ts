@@ -5,9 +5,9 @@ import type { RenderCheck } from "./render-check.ts";
  * Why a change didn't Land, for the Player (`reason`) and for the platform
  * (`failure`): `unchanged` means the Agent changed nothing, `conflict` that
  * rebasing onto `main` conflicted, `render` that the candidate commit failed
- * the render check.
+ * the render check (`problem` says what was wrong, for the Agent).
  */
-export type LandResult = { landed: true; commit: string } | { landed: false; reason: string; failure?: LandFailure };
+export type LandResult = { landed: true; commit: string } | { landed: false; reason: string; failure?: LandFailure; problem?: string };
 export type LandFailure = "unchanged" | "conflict" | "render";
 
 /**
@@ -46,7 +46,7 @@ export class Lander {
     const render = await this.renderCheck.check(commit);
     if (!render.rendered) {
       console.warn(`Commit ${commit} failed the render check: ${render.problem}`);
-      return { landed: false, reason: "Canvas didn't render", failure: "render" };
+      return { landed: false, reason: "Canvas didn't render", failure: "render", problem: render.problem };
     }
     await this.repo.moveMain(commit, base);
     return { landed: true, commit };

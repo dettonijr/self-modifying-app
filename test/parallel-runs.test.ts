@@ -97,30 +97,6 @@ describe("Parallel Runs", () => {
     }
   });
 
-  it("rejects a Run whose rebase conflicts, leaving main unchanged", async () => {
-    const { platform, agent } = await start();
-    const hold = new Gate();
-    agent.enqueue(
-      async (run) => {
-        await run.writeFile("index.html", "<h1>Snow</h1>");
-        await Promise.race([hold.wait(), run.aborted()]);
-      },
-      (run) => run.writeFile("index.html", "<h1>Rain</h1>"),
-    );
-    const held = await platform.sendPrompt({ nickname: "Alice", prompt: "title it Snow" });
-    await agent.started(1);
-    const quick = await platform.sendPrompt({ nickname: "Bob", prompt: "title it Rain" });
-    const first = await platform.waitForRun(quick.id);
-    expect(first).toMatchObject({ state: "landed" });
-
-    hold.release();
-    const rejected = await platform.waitForRun(held.id);
-    expect(rejected).toMatchObject({ state: "rejected", error: expect.stringMatching(/conflict/i) });
-    expect(git(platform, ["rev-parse", "main"])).toBe(first.commit);
-    expect(await (await platform.fetchCanvas("/")).text()).toContain("Rain");
-    expect(git(platform, ["branch", "--list"])).toBe("* main");
-  });
-
   it("runs only as many Runs at once as the configured limit", async () => {
     const { platform, agent } = await start({ maxParallelRuns: 2 });
     const go = new Gate();

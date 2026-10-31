@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { FakeAgent } from "./support/fake-agent.ts";
+import { FakeAgent, type FakeAgentScript } from "./support/fake-agent.ts";
 import { startTestPlatform, type TestPlatform } from "./support/harness.ts";
 
 describe("Render check", () => {
@@ -18,7 +18,7 @@ describe("Render check", () => {
   it("doesn't Land a change that leaves the page blank, and main stays put", async () => {
     const { platform, agent } = await start();
     const before = main(platform);
-    agent.enqueue((run) => run.writeFile("index.html", "<!doctype html><html><head><title>gone</title></head><body></body></html>"));
+    breakEveryAttempt(agent, (run) => run.writeFile("index.html", "<!doctype html><html><head><title>gone</title></head><body></body></html>"));
 
     const run = await platform.sendPrompt({ nickname: "Alice", prompt: "remove everything" });
 
@@ -30,7 +30,7 @@ describe("Render check", () => {
   it("doesn't Land a change whose page throws a fatal error on load", async () => {
     const { platform, agent } = await start();
     const before = main(platform);
-    agent.enqueue((run) =>
+    breakEveryAttempt(agent, (run) =>
       run.writeFile(
         "index.html",
         `<!doctype html><html><body><h1>The Canvas</h1><script>throw new Error("boom");</script></body></html>`,
@@ -58,7 +58,7 @@ describe("Render check", () => {
   it("doesn't Land a change that removes the entry page", async () => {
     const { platform, agent } = await start();
     const before = main(platform);
-    agent.enqueue((run) => run.deleteFile("index.html"));
+    breakEveryAttempt(agent, (run) => run.deleteFile("index.html"));
 
     const run = await platform.sendPrompt({ nickname: "Dave", prompt: "delete the page" });
 
@@ -66,6 +66,11 @@ describe("Render check", () => {
     expect(main(platform)).toBe(before);
   });
 });
+
+/** Plays the Run, both resolution attempts and the restart with the same breaking script, so nothing ever renders. */
+function breakEveryAttempt(agent: FakeAgent, script: FakeAgentScript): void {
+  agent.enqueue(script, script, script, script);
+}
 
 function main(platform: TestPlatform): string {
   return execFileSync("git", ["rev-parse", "main"], { cwd: platform.canvasRepoDir, encoding: "utf8" }).trim();
