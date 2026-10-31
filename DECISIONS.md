@@ -202,6 +202,7 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **Buttons must be easy to read**: large text, WCAG AA contrast, obvious disabled state (user, 2026-10-31).
 - **Every page must work on phones** (from 360px wide, 44×44px tap targets, no hover-only interactions) (user, 2026-10-31).
 - **The mobile rules for Claude are written twice: appended to `PLATFORM_RULES` in `src/claude-agent.ts` and as "Every change works on phones" in `starter-canvas/CLAUDE.md`** (ticket 07): fit from 360px with no sideways scrolling, pointer events rather than mouse-only plus `touch-action` on draggable things, nothing hover-only, 44×44px tap targets, viewport meta on every page. Keep both in sync.
+- **The starter Canvas must fit 360px: keep the `features` grid's minimum column under about 296px, and its buttons (e.g. Wave, about 34px tall as of ticket 07) at least 44px tall** (ticket 07); a test checks it fits 390px without sideways scrolling.
 - **Every Canvas change Players ask for must be playable on phones** (user, 2026-10-31). Claude is told so in the Canvas `CLAUDE.md` and platform rules, and the render check also loads candidates at phone size, rejecting only blank pages or crashes, not awkward layouts, so accidents stay part of the game.
 
 ## Security
