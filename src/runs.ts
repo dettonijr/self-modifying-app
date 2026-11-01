@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readdir, rm } from "node:fs/promises";
 import path from "node:path";
-import { addUsage, DEFAULT_MODEL, MODELS, zeroUsage, type Agent, type Model, type TokenUsage, type UsageCounts } from "./agent.ts";
+import { addUsage, DEFAULT_MODEL, MODELS, zeroUsage, type Agent, type AgentEvent, type Model, type TokenUsage, type UsageCounts } from "./agent.ts";
 import type { CanvasRepository, ChangeKind, ChangeMetadata, LandedChange, OriginalChange, Worktree } from "./canvas-repository.ts";
 import type { Lander, LandResult, LandStep } from "./lander.ts";
 import { rulesFor } from "./change-kinds.ts";
@@ -581,13 +581,19 @@ export class Runs {
           this.publish({ type: "files", runId: run.id, files: [...run.editing] });
         }
       }
-      if (event.type === "message" && event.text.trim() !== "") this.log(run, "claude", event.text);
-      if ((event.type === "thinking" || event.type === "tool") && event.text.trim() !== "") this.log(run, event.type, event.text);
+      if (isLogged(event) && event.text.trim() !== "") this.log(run, LOG_SOURCES[event.type], event.text);
       if (event.type === "usage") this.addUsage(run, model, event.usage);
       if (event.type === "result") return event.outcome === "failure" ? event.error : undefined;
     }
     return "The Agent stopped without a result";
   }
+}
+
+/** Which Agent events go in the Run's log, and as which source. */
+const LOG_SOURCES = { message: "claude", thinking: "thinking", tool: "tool" } as const satisfies Partial<Record<AgentEvent["type"], LogEntry["source"]>>;
+
+function isLogged(event: AgentEvent): event is Extract<AgentEvent, { type: keyof typeof LOG_SOURCES }> {
+  return Object.hasOwn(LOG_SOURCES, event.type);
 }
 
 /** Whether a failed Land is one the Agent may be able to fix. */

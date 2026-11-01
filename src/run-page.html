@@ -162,7 +162,13 @@
 
     const entryKey = ({ time, source, text }) => JSON.stringify([time, source, text]);
 
-    const SOURCE_LABELS = { platform: "Platform", claude: "Claude", thinking: "Thinking", tool: "Tool" };
+    /** The log's sources: the label on each entry, and on its filter chip. */
+    const LOG_SOURCES = {
+      platform: { entry: "Platform", chip: "Platform" },
+      claude: { entry: "Claude", chip: "Claude" },
+      thinking: { entry: "Thinking", chip: "Thinking" },
+      tool: { entry: "Tool", chip: "Tools" },
+    };
 
     /** One line of the log: its time, where it's from and what was said, thought or done. */
     function logEntry({ time, source, text }) {
@@ -172,7 +178,7 @@
       when.dateTime = time;
       when.textContent = new Date(time).toLocaleTimeString();
       when.title = new Date(time).toLocaleString();
-      item.append(when, " ", span("source", SOURCE_LABELS[source] ?? source), " ", source === "thinking" ? thinkingText(text) : span("text", text));
+      item.append(when, " ", span("source", LOG_SOURCES[source]?.entry ?? source), " ", source === "thinking" ? thinkingText(text) : span("text", text));
       return item;
     }
 
@@ -195,7 +201,6 @@
      */
     const logFilters = {
       key: "runLogHidden",
-      chips: [["platform", "Platform"], ["claude", "Claude"], ["thinking", "Thinking"], ["tool", "Tools"]],
       hidden() {
         try {
           const saved = JSON.parse(localStorage.getItem(this.key) ?? "[]");
@@ -209,7 +214,7 @@
         for (const chip of $("log").querySelectorAll(".filters button")) chip.setAttribute("aria-pressed", String(!hidden.has(chip.dataset.source)));
       },
       start() {
-        const chips = this.chips.map(([source, label]) => {
+        const chips = Object.entries(LOG_SOURCES).map(([source, { chip: label }]) => {
           const chip = button(label, () => {
             const hidden = this.hidden();
             if (hidden.has(source)) hidden.delete(source);
