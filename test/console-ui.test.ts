@@ -112,36 +112,7 @@ describe("Console UI", () => {
     expect(shown).toMatch(/^make it snow .*…$/);
   });
 
-  it("Rolls back a Landed change only after the Player confirms, and lists the Rollback", async () => {
-    const { page, platform, agent } = await join(await open());
-    agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
-    const snowRun = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
-    const history = page.getByTestId("prompts");
-    await page.reload();
-    const snow = history.locator("li", { hasText: "make it snow" });
-    await snow.waitFor();
-
-    await snow.getByRole("button", { name: "Roll back", exact: true }).click();
-    expect(await snow.textContent()).toContain("Roll back Bob's change?");
-    await snow.getByRole("button", { name: "Keep it" }).click();
-    expect(await snow.getByRole("button", { name: "Yes, roll back" }).count()).toBe(0);
-    expect(await history.locator("li").count()).toBe(1);
-
-    await snow.getByRole("button", { name: "Roll back", exact: true }).click();
-    await snow.getByRole("button", { name: "Yes, roll back" }).click();
-    await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
-    const entry = history.locator("li").first();
-    await expect.poll(() => entry.getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
-    expect(await entry.textContent()).toContain("↩ Alice rolled back Bob's");
-    expect(await entry.textContent()).toContain("make it snow");
-    expect(await entry.textContent()).toContain(snowRun.commit!.slice(0, 7));
-    expect(await entry.getAttribute("data-original")).toBe(snowRun.commit);
-    expect(await entry.getByRole("button", { name: "Roll back", exact: true }).count()).toBe(1);
-    expect(await entry.getByRole("button", { name: "Replay", exact: true }).count()).toBe(1);
-    expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
-  });
-
-  it("shows no spending total and never pauses: Send, Replay and Roll back stay enabled however much is used", async () => {
+  it("shows no spending total and never pauses: Send and Replay stay enabled however much is used", async () => {
     const { page, platform, agent } = await join(await open());
     const spendingRequests: string[] = [];
     page.on("request", (request) => {
@@ -164,11 +135,9 @@ describe("Console UI", () => {
     await expect.poll(() => history.locator("li").count(), { timeout: 10_000 }).toBe(2);
     await page.getByLabel("Prompt").fill("three");
     expect(await page.getByRole("button", { name: "Send" }).isDisabled()).toBe(false);
-    for (const name of ["Replay", "Roll back"]) {
-      const buttons = history.getByRole("button", { name, exact: true });
-      await expect.poll(() => buttons.count()).toBe(2);
-      for (const button of await buttons.all()) expect(await button.isDisabled()).toBe(false);
-    }
+    const buttons = history.getByRole("button", { name: "Replay", exact: true });
+    await expect.poll(() => buttons.count()).toBe(2);
+    for (const button of await buttons.all()) expect(await button.isDisabled()).toBe(false);
     expect(await page.getByTestId("spending").count()).toBe(0);
     expect(await page.getByTestId("paused").count()).toBe(0);
     expect(await page.locator("body").textContent()).not.toMatch(/spent|spending cap|paused/i);
@@ -203,7 +172,7 @@ describe("Console UI", () => {
     const snow = list.locator("li", { hasText: "make it snow" });
     const rain = list.locator("li", { hasText: "make it rain" });
     const noActions = async (entry: typeof snow) => {
-      for (const name of ["Replay", "Roll back"]) expect(await entry.getByRole("button", { name, exact: true }).count()).toBe(0);
+      expect(await entry.getByRole("button", { name: "Replay", exact: true }).count()).toBe(0);
     };
 
     await page.getByLabel("Prompt").fill("make it snow");

@@ -28,10 +28,6 @@ _Avoid_: Job, task, build
 What happens when a Run's change becomes part of the live Canvas.
 _Avoid_: Merge, deploy, publish
 
-**Rollback**:
-Undoing a change that has already Landed, while keeping everything that Landed after it.
-_Avoid_: Reset, undo
-
 **Replay**:
 A new Run that sends a past Prompt again against the current Canvas, keeping everything that Landed since. It wins over later changes on the thing it's about.
 _Avoid_: Retry, redo, restore

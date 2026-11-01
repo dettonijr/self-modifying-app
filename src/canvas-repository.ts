@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 import type { Model } from "./agent.ts";
 import { git, gitBytes, GitError } from "./git.ts";
 
-/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again. `Rollback`: an earlier change rolled back. */
-export const CHANGE_KINDS = ["Prompt", "Replay", "Rollback"] as const;
+/** `Prompt`: a Player's own Prompt. `Replay`: a past Prompt sent again. */
+export const CHANGE_KINDS = ["Prompt", "Replay"] as const;
 export type ChangeKind = (typeof CHANGE_KINDS)[number];
 
 /** What every commit on `main` records about the change (besides the Starter Canvas). */
@@ -15,7 +15,7 @@ export interface ChangeMetadata {
   nickname: string;
   prompt: string;
   model: Model;
-  /** The change a Replay re-applies or a Rollback rolls back, and who made it. */
+  /** The change a Replay re-applies, and who made it. */
   original?: OriginalChange;
   /** The id of the Run that made the change, kept as a `Run` trailer so a restart can tell it already Landed. */
   run?: string;
@@ -189,22 +189,6 @@ export class CanvasRepository {
   async landedChange(commit: string): Promise<LandedChange | undefined> {
     if (!(await this.isOnMain(commit))) return undefined;
     return (await this.changes(["-1", commit]))[0];
-  }
-
-  /**
-   * Reverts `commit` in a worktree as uncommitted edits. Returns whether it
-   * reverted cleanly; if it conflicts, the worktree is left as it was.
-   */
-  async revert(worktree: Worktree, commit: string): Promise<boolean> {
-    try {
-      await git(worktree.dir, ["revert", "--no-commit", commit]);
-      return true;
-    } catch (error) {
-      if (!(error instanceof GitError)) throw error;
-      await git(worktree.dir, ["reset", "--quiet", "--hard", "HEAD"]);
-      await git(worktree.dir, ["revert", "--quit"]).catch(() => undefined);
-      return false;
-    }
   }
 
   /**

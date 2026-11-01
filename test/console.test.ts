@@ -28,6 +28,18 @@ describe("Console server", () => {
     expect((await platform.consoleApi("/api/runs")).status).toBe(200);
   });
 
+  it("has no Rollback endpoint or Roll back button", async () => {
+    platform = await startTestPlatform();
+    const response = await platform.consoleApi("/api/rollbacks", {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: "nickname=Alice" },
+      body: JSON.stringify({ commit: "HEAD" }),
+    });
+    expect(response.status).toBe(404);
+    const shared = await (await fetch(platform.consoleUrl + "/console-shared.js")).text();
+    expect(shared).not.toMatch(/roll ?back/i);
+  });
+
   it("refuses API calls made from the Canvas origin", async () => {
     platform = await startTestPlatform();
     const response = await platform.consoleApi("/api/health", {

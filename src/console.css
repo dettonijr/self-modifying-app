@@ -50,7 +50,7 @@ textarea { width: 100%; min-height: 7rem; resize: vertical; }
 input::placeholder, textarea::placeholder { color: var(--color-text-muted); opacity: 0.8; }
 select { cursor: pointer; }
 
-/* Buttons: large, high-contrast, at least 44×44px. Primary is the accent fill; .secondary is outlined; .danger is for destructive confirmations. */
+/* Buttons: large, high-contrast, at least 44×44px. Primary is the accent fill; .secondary is outlined. */
 button {
   font: inherit;
   font-size: 1rem;
@@ -71,11 +71,6 @@ button.secondary {
   background: var(--color-surface-raised);
   border-color: var(--color-border-strong);
   color: var(--color-text);
-}
-button.danger {
-  background: var(--color-danger);
-  border-color: var(--color-danger);
-  color: var(--color-on-color);
 }
 button:disabled {
   background: var(--color-background-deep);
@@ -118,7 +113,7 @@ button:disabled {
 .outcome.error, .error { color: var(--color-danger); }
 .empty { color: var(--color-text-muted); }
 
-/* Replay and Roll back, with their confirmations. */
+/* Replay, with its confirmation. */
 .actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
 .actions > button { flex: 0 0 auto; }
 .confirm {
@@ -133,7 +128,6 @@ button:disabled {
   background: var(--color-background-deep);
 }
 .confirm > span { flex: 1 1 100%; font-weight: 600; }
-.confirm.rollback { border-color: var(--color-danger); border-left-width: 6px; }
 .confirm select { flex: 1 1 10rem; }
 
 #status:empty { display: none; }

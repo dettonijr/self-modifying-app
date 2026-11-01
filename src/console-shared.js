@@ -57,14 +57,12 @@ export function detailsOf(run) {
 }
 
 /**
- * How a Replay or Rollback Run is labelled: its mark, its kind's name, and
- * what its Player did or is doing to the original ("replayed", "rolls back").
+ * How a Replay Run is labelled: its mark, its kind's name, and what its
+ * Player did or is doing to the original ("replayed", "replays").
  * `run.finished` comes from the Console API.
  */
 export function changeLabel(run) {
-  return run.kind === "Rollback"
-    ? { mark: "↩ ", name: "Rollback", verb: run.finished ? "rolled back" : "rolls back" }
-    : { mark: "↻ ", name: "Replay", verb: run.finished ? "replayed" : "replays" };
+  return { mark: "↻ ", name: "Replay", verb: run.finished ? "replayed" : "replays" };
 }
 
 /** Shows `message` (text, or an array of text and nodes) in a status line, as an error if `isError`. */
@@ -87,7 +85,7 @@ export function span(className, text) {
   return element;
 }
 
-/** A button; `look` is "secondary" or "danger" (see console.css), primary if omitted. */
+/** A button; `look` is "secondary" (see console.css), primary if omitted. */
 export function button(text, onClick, look) {
   const element = document.createElement("button");
   element.type = "button";
@@ -104,11 +102,11 @@ export function connectLive(onMessage) {
   socket.addEventListener("close", () => setTimeout(() => connectLive(onMessage), 1000));
 }
 
-// The open confirmation, kept across re-renders: the Run's id, whether it's a "replay" or a "rollback", and the picked Replay model.
+// The open Replay confirmation, kept across re-renders: the Run's id and the picked model.
 let confirming;
 
 /**
- * Replay and Roll back for a Landed Run, each asking for confirmation first.
+ * Replay for a Landed Run, asking for confirmation first.
  * `defaultModel()` is the model a Replay starts with; `onQueued` gets
  * `{ ok, run, error, what, started }` once the Console has answered.
  */
@@ -116,18 +114,11 @@ export function actionsFor(run, { defaultModel, onQueued }) {
   const actions = document.createElement("div");
   actions.className = "actions";
   const replay = button("Replay", () => {
-    confirming = { id: run.id, action: "replay", model: defaultModel() };
+    confirming = { id: run.id, model: defaultModel() };
     showReplayConfirmation(run, actions, onQueued);
   }, "secondary");
-  const rollback = button("Roll back", () => {
-    confirming = { id: run.id, action: "rollback" };
-    showRollbackConfirmation(run, actions, onQueued);
-  }, "secondary");
-  actions.append(replay, rollback);
-  if (confirming?.id === run.id) {
-    if (confirming.action === "replay") showReplayConfirmation(run, actions, onQueued);
-    else showRollbackConfirmation(run, actions, onQueued);
-  }
+  actions.append(replay);
+  if (confirming?.id === run.id) showReplayConfirmation(run, actions, onQueued);
   return actions;
 }
 
@@ -155,23 +146,8 @@ function showReplayConfirmation(run, actions, onQueued) {
   actions.append(confirm);
 }
 
-/** Asks before a Rollback starts. */
-function showRollbackConfirmation(run, actions, onQueued) {
-  actions.querySelector(".confirm")?.remove();
-  const confirm = document.createElement("span");
-  confirm.className = "confirm rollback";
-  const question = span("", `Roll back ${run.nickname}'s change? Everything that Landed after it is kept.`);
-  const go = button("Yes, roll back", async () => {
-    closeConfirmation(confirm);
-    onQueued(await queueChange("/api/rollbacks", { commit: run.commit }, "Rollback", "Rolling it back…"));
-  }, "danger");
-  const cancel = button("Keep it", () => closeConfirmation(confirm), "secondary");
-  confirm.append(question, " ", go, " ", cancel);
-  actions.append(confirm);
-}
-
 /**
- * POSTs a change (a Prompt, Replay or Rollback) to the Console API. Resolves
+ * POSTs a change (a Prompt or Replay) to the Console API. Resolves
  * with `{ ok, what, run, started }` once queued, or `{ ok: false, what, error }`
  * if refused; `started` is the status to show if it's already running.
  */

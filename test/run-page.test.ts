@@ -65,8 +65,6 @@ describe("The Run page", () => {
 
     await entry.getByRole("button", { name: "Replay", exact: true }).click();
     await entry.getByRole("button", { name: "Cancel" }).click();
-    await entry.getByRole("button", { name: "Roll back", exact: true }).click();
-    await entry.getByRole("button", { name: "Keep it" }).click();
     expect(new URL(page.url()).pathname).toBe("/");
 
     await entry.locator(".details").click();
@@ -100,7 +98,7 @@ describe("The Run page", () => {
     await expect.poll(() => details.locator(".outcome").textContent(), { timeout: 10_000 }).toBe("Claude gave up");
     expect(await details.getAttribute("data-state")).toBe("rejected");
     expect(await details.locator(".state").textContent()).toMatch(/rejected/i);
-    for (const name of ["Replay", "Roll back"]) expect(await page.getByRole("button", { name, exact: true }).count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Replay", exact: true }).count()).toBe(0);
     await expect.poll(() => page.getByTestId("log").locator("li").last().textContent(), { timeout: 10_000 }).toContain("Rejected: Claude gave up");
   });
 
@@ -272,28 +270,7 @@ describe("The Run page", () => {
     expect(await details.locator(".prompt").textContent()).toBe("make it snow");
   });
 
-  it("rolls back a Landed Run after a confirmation, and the Rollback's page names its original", async () => {
-    const { platform, agent } = await start();
-    agent.enqueue((run) => run.writeFile("features/snow/snow.js", "snow"));
-    const snow = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
-    const page = await newPage(platform, "Alice");
-    await page.goto(`${platform.consoleUrl}/runs/${snow.id}`);
-
-    await page.getByRole("button", { name: "Roll back", exact: true }).click();
-    expect(await page.getByTestId("run").textContent()).toContain("Roll back Bob's change?");
-    await page.getByRole("button", { name: "Keep it" }).click();
-    expect(await page.getByRole("button", { name: "Yes, roll back" }).count()).toBe(0);
-
-    await page.getByRole("button", { name: "Roll back", exact: true }).click();
-    await page.getByRole("button", { name: "Yes, roll back" }).click();
-    await page.getByRole("link", { name: "Follow your Rollback" }).click();
-    await expect.poll(() => page.getByTestId("run").getAttribute("data-state"), { timeout: 10_000 }).toBe("landed");
-    expect(await page.locator("#original").textContent()).toBe("↩ Rollback of Bob's 'make it snow'");
-    expect(await page.getByRole("link", { name: "Rollback of Bob's 'make it snow'" }).getAttribute("href")).toBe(`/runs/${snow.commit}`);
-    expect((await platform.fetchCanvas("/features/snow/snow.js")).status).toBe(404);
-  });
-
-  it("never disables Replay and Roll back for spending, and shows no paused state", async () => {
+  it("never disables Replay for spending, and shows no paused state", async () => {
     const { platform, agent } = await start();
     agent.enqueue(async (run) => {
       run.usage({ inputTokens: 10_000_000, outputTokens: 0 }); // $20 on Sonnet 5.5, twice the old default cap
@@ -302,11 +279,9 @@ describe("The Run page", () => {
     const snow = await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "make it snow" })).id);
     const page = await newPage(platform, "Alice");
     await page.goto(`${platform.consoleUrl}/runs/${snow.id}`);
-    for (const name of ["Replay", "Roll back"]) {
-      const button = page.getByRole("button", { name, exact: true });
-      await button.waitFor({ timeout: 10_000 });
-      expect(await button.isDisabled()).toBe(false);
-    }
+    const button = page.getByRole("button", { name: "Replay", exact: true });
+    await button.waitFor({ timeout: 10_000 });
+    expect(await button.isDisabled()).toBe(false);
     expect(await page.getByTestId("paused").count()).toBe(0);
   });
 

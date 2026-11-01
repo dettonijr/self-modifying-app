@@ -56,6 +56,6 @@ await db.delete("title");
 
 - Pass the feature's folder name to `channel()` and `store()`. Each feature has its own channel and its own keys, so features don't see each other's messages or overwrite each other's data. Use another feature's name only when the Prompt is about sharing its data.
 - Channel messages aren't stored: a viewer only gets messages sent while their page is open. To show history (chat logs, guestbooks), also save each item in the store and load it with `list()` when the page opens.
-- Stored data isn't part of the Canvas's files, so it survives every change, Rollback and Replay, including removing the feature. Code may find data saved by an older version of the feature, so read it defensively.
+- Stored data isn't part of the Canvas's files, so it survives every change and Replay, including removing the feature. Code may find data saved by an older version of the feature, so read it defensively.
 - There are no transactions: `get` then `set` from two viewers at once can lose an update. For tallies, prefer one key per contribution (e.g. `vote/<random id>`) counted with `list()`, over one shared counter.
 - Pages reload when a change Lands, so subscribe and load data when the module starts.

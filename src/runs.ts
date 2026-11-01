@@ -29,7 +29,7 @@ export interface RunView {
   model: Model;
   /** What kind of change the Run makes; a Player's own Prompt if absent. */
   kind?: ChangeKind;
-  /** The earlier change a Replay re-applies or a Rollback rolls back; `prompt` is that change's Prompt. */
+  /** The earlier change a Replay re-applies; `prompt` is that change's Prompt. */
   original?: OriginalChange;
   /** Why the Run was rejected. */
   error?: string;
@@ -133,12 +133,6 @@ export interface PromptRequest {
   model?: unknown;
 }
 
-/** Roll back the change that Landed as `commit`, keeping what Landed after it. */
-export interface RollbackRequest {
-  nickname: unknown;
-  commit: unknown;
-}
-
 /** A Replay: send the Prompt of the change that Landed as `commit` again. */
 export interface ReplayRequest {
   nickname: unknown;
@@ -217,19 +211,11 @@ export class Runs {
     return this.enqueueAbout("Replay", request);
   }
 
-  /**
-   * Queues a Rollback of a change in the history, or throws `ChangeRefused`.
-   * It follows the same rules as a Prompt, including the one waiting slot.
-   */
-  rollback(request: RollbackRequest): Promise<RunView> {
-    return this.enqueueAbout("Rollback", request);
-  }
-
   /** Queues a Run of `kind` about the change that Landed as `request.commit`, with that change's Prompt. */
-  private async enqueueAbout(kind: "Replay" | "Rollback", request: { nickname: unknown; commit: unknown; model?: unknown }): Promise<RunView> {
+  private async enqueueAbout(kind: "Replay", request: { nickname: unknown; commit: unknown; model?: unknown }): Promise<RunView> {
     const nickname = validNickname(request.nickname);
     if (nickname === undefined) throw new ChangeRefused("invalid", "Pick a nickname first");
-    const model = rulesFor({ kind }).playerPicksModel ? validModel(request.model) : DEFAULT_MODEL;
+    const model = validModel(request.model);
     const original = typeof request.commit === "string" ? await this.repo.landedChange(request.commit) : undefined;
     if (original === undefined) throw new ChangeRefused("not-found", "There's no such change in the history");
     return this.enqueue({
@@ -303,7 +289,7 @@ export class Runs {
     this.startWaitingRuns();
   }
 
-  /** A Run by its id, or else the Run that Landed as commit `id` (as a Replay or Rollback refers to its original). */
+  /** A Run by its id, or else the Run that Landed as commit `id` (as a Replay refers to its original). */
   get(id: string): RunView | undefined {
     const run = this.runs.get(id) ?? this.byCommit.get(id);
     return run && copy(run);
@@ -484,22 +470,13 @@ export class Runs {
     }
   }
 
-  /**
-   * Lets the Agent do the Run's work in the worktree, then Lands it. Some
-   * kinds of change (a Rollback) are first tried mechanically, and only need
-   * the Agent if that fails.
-   */
+  /** Lets the Agent do the Run's work in the worktree, then Lands it. */
   private async workOnce(run: RunView, worktree: Worktree, signal: AbortSignal): Promise<LandResult> {
     const rules = rulesFor(run);
-    const mechanical = rules.mechanically !== undefined && (await rules.mechanically(this.repo, worktree, run));
-    if (!mechanical) {
-      const failure = await this.runAgent(run, worktree, signal, await rules.instructions(this.repo, worktree, run), run.model);
-      if (failure !== undefined) return { landed: false, reason: failure };
-    }
+    const failure = await this.runAgent(run, worktree, signal, await rules.instructions(this.repo, worktree, run), run.model);
+    if (failure !== undefined) return { landed: false, reason: failure };
     this.setState(run, "landing");
-    const result = await this.land(run, worktree);
-    if (mechanical && !result.landed && result.failure === "unchanged" && rules.nothingToDo) return { ...result, reason: rules.nothingToDo };
-    return result;
+    return this.land(run, worktree);
   }
 
   /** `workOnce`, then up to `MAX_RESOLUTION_ATTEMPTS` resolutions if the change conflicts or doesn't render. */

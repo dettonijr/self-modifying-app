@@ -9,7 +9,7 @@ export interface Entry {
  * The platform's key-value store for Canvas features, in a SQLite file in the
  * data folder. Every entry belongs to one feature, so features can use the
  * same keys without clashing. It lives outside the Canvas repo, so nothing
- * that changes the Canvas (Landing, Rollback, Replay) changes it. Values are
+ * that changes the Canvas (Landing, Replay) changes it. Values are
  * stored as JSON text.
  */
 export class KeyValueStore {

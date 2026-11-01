@@ -67,9 +67,6 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       if (url.pathname === "/api/replays" && req.method === "POST") {
         return await queueChange(req, res, (body, nickname) => runs.replay({ nickname, commit: body.commit, model: body.model }));
       }
-      if (url.pathname === "/api/rollbacks" && req.method === "POST") {
-        return await queueChange(req, res, (body, nickname) => runs.rollback({ nickname, commit: body.commit }));
-      }
       if (url.pathname === "/api/runs" && req.method === "GET") {
         return sendJson(res, 200, runs.list());
       }

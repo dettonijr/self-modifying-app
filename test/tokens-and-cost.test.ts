@@ -146,25 +146,6 @@ describe("Tokens and cost per Prompt", () => {
     });
   });
 
-  it("shows zero for a Rollback that reverted cleanly, without Claude", async () => {
-    const { platform, agent } = await start();
-    agent.enqueue(async (run) => {
-      run.usage({ inputTokens: 1000, outputTokens: 100 });
-      await run.writeFile("features/snow/snow.js", "snow");
-    });
-    const snow = await platform.waitForRun((await platform.sendPrompt({ nickname: "Alice", prompt: "make it snow" })).id);
-
-    const response = await platform.consoleApi("/api/rollbacks", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: "nickname=Bob" },
-      body: JSON.stringify({ commit: snow.commit }),
-    });
-    const rollback = await platform.waitForRun(((await response.json()) as { id: string }).id);
-
-    expect(rollback).toMatchObject({ state: "landed", usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, cost: 0 } });
-    expect(await listed(platform, snow.id)).toMatchObject({ usage: { inputTokens: 1000 } });
-  });
-
   it("has no usage for a Run recorded before usage was", async () => {
     const dataDir = await tempDataDir();
     const before = await start({ dataDir });
@@ -257,16 +238,11 @@ describe("The tokens and cost line", () => {
     await expect.poll(() => pageLine.textContent(), { timeout: 10_000 }).toBe("3k (33k) tokens · ~$0.02");
   });
 
-  it("shows zero for a clean-revert Rollback and a dash for a Run recorded before usage was", async () => {
+  it("shows zero for a Run that used no tokens and a dash for a Run recorded before usage was", async () => {
     const dataDir = await tempDataDir();
     const before = await start({ dataDir });
     const snow = await landWith(before.platform, before.agent, "Alice", "make it snow", { inputTokens: 1000, outputTokens: 0 });
-    const response = await before.platform.consoleApi("/api/rollbacks", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: "nickname=Bob" },
-      body: JSON.stringify({ commit: snow.commit }),
-    });
-    const rollback = await before.platform.waitForRun(((await response.json()) as { id: string }).id);
+    const free = await landWith(before.platform, before.agent, "Bob", "make it rain");
     await before.platform.close();
     forgetUsage(dataDir, snow.id);
     const { platform } = await start({ dataDir });
@@ -274,11 +250,11 @@ describe("The tokens and cost line", () => {
     const list = await open(platform.consoleUrl + "/");
     const entries = list.getByTestId("prompts").locator("li");
     await expect.poll(() => entries.count()).toBe(2);
-    expect(await entryLine(list, rollback.id).textContent()).toBe("0 (0) tokens · ~$0.00");
+    expect(await entryLine(list, free.id).textContent()).toBe("0 (0) tokens · ~$0.00");
     expect(await entryLine(list, snow.id).textContent()).toBe("—");
 
-    const rollbackPage = await open(`${platform.consoleUrl}/runs/${rollback.id}`);
-    await expect.poll(() => rollbackPage.getByTestId("run").locator(".details .usage").textContent()).toBe("0 (0) tokens · ~$0.00");
+    const freePage = await open(`${platform.consoleUrl}/runs/${free.id}`);
+    await expect.poll(() => freePage.getByTestId("run").locator(".details .usage").textContent()).toBe("0 (0) tokens · ~$0.00");
     const olderPage = await open(`${platform.consoleUrl}/runs/${snow.id}`);
     await expect.poll(() => olderPage.getByTestId("run").locator(".details .usage").textContent()).toBe("—");
   });

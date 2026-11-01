@@ -70,7 +70,7 @@ export function channel(feature) {
 /**
  * A feature's key-value store. Values are any JSON value. Keys belong to the
  * feature, so two features can use the same key without clashing. Data is kept
- * across every change to the Canvas, including Rollback and Replay.
+ * across every change to the Canvas, including Replay.
  */
 export function store(feature) {
   checkFeature(feature);

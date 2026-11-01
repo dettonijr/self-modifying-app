@@ -144,21 +144,18 @@ describe("Platform services over HTTP", () => {
     expect((await restarted.fetchCanvas("/__platform/store/other/title")).status).toBe(404);
   });
 
-  it("keeps key-value data when the change that added the feature is rolled back", async () => {
+  it("keeps key-value data when a later change removes the feature", async () => {
     const { platform, agent } = await start();
-    agent.enqueue((run) => run.writeFile("features/guestbook/guestbook.js", "// guestbook"));
+    agent.enqueue(
+      (run) => run.writeFile("features/guestbook/guestbook.js", "// guestbook"),
+      (run) => run.deleteFile("features/guestbook/guestbook.js"),
+    );
     const added = await platform.waitForRun((await platform.sendPrompt({ nickname: "Alice", prompt: "add a guestbook" })).id);
     expect(added.state).toBe("landed");
     expect((await put(platform, "/__platform/store/guestbook/entry/1", { name: "Bob", text: "Hi!" })).status).toBe(204);
 
-    const response = await platform.consoleApi("/api/rollbacks", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: "nickname=Carol" },
-      body: JSON.stringify({ commit: added.commit }),
-    });
-    expect(response.status).toBe(202);
-    const rolledBack = await platform.waitForRun(((await response.json()) as { id: string }).id);
-    expect(rolledBack.state).toBe("landed");
+    const removed = await platform.waitForRun((await platform.sendPrompt({ nickname: "Carol", prompt: "remove the guestbook" })).id);
+    expect(removed.state).toBe("landed");
     expect((await platform.fetchCanvas("/features/guestbook/guestbook.js")).status).toBe(404);
 
     expect(await (await platform.fetchCanvas("/__platform/store/guestbook/entry/1")).json()).toEqual({ value: { name: "Bob", text: "Hi!" } });

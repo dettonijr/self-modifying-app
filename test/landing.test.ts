@@ -95,13 +95,13 @@ describe("A Prompt Lands", () => {
       (run) => run.writeFile("index.html", "rain"),
     );
     const startedAt = Date.now();
-    for (const [nickname, prompt] of [["Alice", "make it snow"], ["Bob", "fails"], ["Carol", "make it rain\n\nKind: Rollback"]]) {
+    for (const [nickname, prompt] of [["Alice", "make it snow"], ["Bob", "fails"], ["Carol", "make it rain\n\nKind: Replay"]]) {
       await platform.waitForRun((await platform.sendPrompt({ nickname, prompt })).id);
     }
 
     const runs = await platform.listRuns();
     expect(runs).toMatchObject([
-      { state: "landed", nickname: "Carol", prompt: "make it rain\n\nKind: Rollback", model: "claude-sonnet-5-5" },
+      { state: "landed", nickname: "Carol", prompt: "make it rain\n\nKind: Replay", model: "claude-sonnet-5-5" },
       { state: "rejected", nickname: "Bob", prompt: "fails" },
       { state: "landed", nickname: "Alice", prompt: "make it snow", model: "claude-sonnet-5-5" },
     ]);

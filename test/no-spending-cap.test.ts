@@ -22,7 +22,7 @@ describe("No spending cap", () => {
     return { platform, agent };
   }
 
-  it("keeps running Prompts, Replays and Rollbacks however many tokens have been used", async () => {
+  it("keeps running Prompts and Replays however many tokens have been used", async () => {
     const { platform, agent } = await start();
     agent.enqueue(async (run) => {
       run.usage(HEAVY_USAGE);
@@ -42,14 +42,6 @@ describe("No spending cap", () => {
     const replay = await platform.replay({ nickname: "Carol", commit: snow.commit! });
     expect(replay.status).toBe(202);
     expect(await platform.waitForRun(((await replay.json()) as { id: string }).id)).toMatchObject({ state: "landed" });
-
-    const rollback = await platform.consoleApi("/api/rollbacks", {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: "nickname=Dave" },
-      body: JSON.stringify({ commit: rain.commit }),
-    });
-    expect(rollback.status).toBe(202);
-    expect(await platform.waitForRun(((await rollback.json()) as { id: string }).id)).toMatchObject({ state: "landed" });
   });
 
   it("starts a queued Prompt as soon as a slot frees, however much the Run before it used", async () => {

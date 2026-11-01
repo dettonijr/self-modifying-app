@@ -335,7 +335,7 @@
       }
     }
 
-    /** The same details as the Run's Prompts list entry, with the whole Prompt, plus Replay and Roll back once Landed. */
+    /** The same details as the Run's Prompts list entry, with the whole Prompt, plus Replay once Landed. */
     function renderDetails() {
       document.title = `${run.nickname}: ${run.prompt}`;
       $("run").dataset.state = run.state;

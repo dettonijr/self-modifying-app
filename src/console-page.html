@@ -163,7 +163,7 @@
 
     const shorten = (text) => (text.length > MAX_PROMPT_SHOWN ? text.slice(0, MAX_PROMPT_SHOWN - 1).trimEnd() + "…" : text);
 
-    /** One Prompts list entry: state, who, the Prompt, model, time and outcome, plus Replay and Roll back once Landed. */
+    /** One Prompts list entry: state, who, the Prompt, model, time and outcome, plus Replay once Landed. */
     function entry(run) {
       const item = document.createElement("li");
       item.dataset.run = run.id;
@@ -179,7 +179,7 @@
       link.href = runUrl(run.id);
       link.append(prompt);
       item.append(span(`state ${run.state}`, run.state), " ");
-      if ((run.kind === "Replay" || run.kind === "Rollback") && run.original) {
+      if (run.kind === "Replay" && run.original) {
         item.dataset.original = run.original.commit;
         const reference = document.createElement("code");
         reference.className = "original";

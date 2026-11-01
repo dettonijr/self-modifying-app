@@ -129,13 +129,13 @@ describe("Look and feel", () => {
     expect(parseFloat(style.fontSize)).toBeGreaterThanOrEqual(14);
   });
 
-  it("gives buttons large, AA-contrast text, an obvious disabled state, and a distinct look to destructive confirmations", async () => {
+  it("gives buttons large, AA-contrast text, and an obvious disabled state", async () => {
     const { platform, agent } = await start();
     const { landed } = await playSomeRuns(platform, agent);
     const page = await newPage(platform);
     await page.goto(platform.consoleUrl + "/");
     const entry = page.locator(`#prompts li[data-run="${landed.id}"]`);
-    await entry.getByRole("button", { name: "Roll back", exact: true }).click();
+    await entry.getByRole("button", { name: "Replay", exact: true }).click();
 
     for (const button of await page.locator("button:visible").all()) {
       const look = await button.evaluate(buttonLook);
@@ -144,11 +144,7 @@ describe("Look and feel", () => {
       expect(look.fontSize, `${name} font size`).toBeGreaterThanOrEqual(16);
     }
 
-    const rollback = await entry.getByRole("button", { name: "Yes, roll back" }).evaluate(buttonLook);
     const send = await page.getByRole("button", { name: "Send" }).evaluate(buttonLook);
-    const keep = await entry.getByRole("button", { name: "Keep it" }).evaluate(buttonLook);
-    expect(rollback.background).not.toBe(send.background);
-    expect(rollback.background).not.toBe(keep.background);
 
     await page.goto(platform.consoleUrl + `/runs/${landed.id}`);
     const thinking = page.locator('li[data-source="thinking"] summary');
@@ -183,9 +179,6 @@ describe("Look and feel", () => {
       const entry = page.locator(`#prompts li[data-run="${landed.id}"]`);
       await entry.getByRole("button", { name: "Replay", exact: true }).click();
       await expectFitsPhone(page, "Console with a Replay confirmation");
-      await entry.getByRole("button", { name: "Cancel" }).click();
-      await entry.getByRole("button", { name: "Roll back", exact: true }).click();
-      await expectFitsPhone(page, "Console with a Rollback confirmation");
 
       await page.goto(platform.consoleUrl + `/runs/${landed.id}`);
       await page.locator(".file summary").first().click();
