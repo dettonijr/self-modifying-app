@@ -25,6 +25,8 @@ docker compose exec platform npm run set-parallel-runs -- 2
 
 It can go up or down and takes effect within a second. Lowering it never stops Runs in progress; waiting Prompts just start once fewer Runs are in progress than the new limit. The setting (`parallel-runs.json`) lives in the data volume and, once set, wins over `MAX_PARALLEL_RUNS`, including after a restart. Runs that were in progress when the platform stopped start again first, ahead of the queue, within the limit.
 
+To start the game over from the starter Canvas, run `scripts/reset-game.sh` on the host. It asks first (`--yes` skips the question), then deletes the `data` volume with every Run, the Canvas history, the platform services' data and the parallel Run setting, and starts the platform again.
+
 Without Docker you need Node 22.18 or later, which runs the TypeScript directly with no build step, and git: `npm install && npm start`. The data goes to `./data`.
 
 ## Layout

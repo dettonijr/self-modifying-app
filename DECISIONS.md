@@ -233,6 +233,10 @@ Newest entries at the bottom. Each entry notes where it came from.
 - **The starter Canvas must fit 360px: keep the `features` grid's minimum column under about 296px, and its buttons (e.g. Wave, about 34px tall as of ticket 07) at least 44px tall** (ticket 07); a test checks it fits 390px without sideways scrolling.
 - **Every Canvas change Players ask for must be playable on phones** (user, 2026-10-31). Claude is told so in the Canvas `CLAUDE.md` and platform rules, and the render check also loads candidates at phone size, rejecting only blank pages or crashes, not awkward layouts, so accidents stay part of the game.
 
+## Resetting the game
+
+- **`scripts/reset-game.sh` resets the game by deleting the whole `data` volume** (2026-11-01, asked for after a manual reset). It runs `docker compose down --volumes`, then `up --detach --build`, and waits for the Console. The platform recreates the Canvas repo from `starter-canvas/` on start. The parallel Run setting (`parallel-runs.json`) is deleted too, so `MAX_PARALLEL_RUNS` applies again. It only covers the Docker setup; without Docker, stop the platform and delete `./data`.
+
 ## Security
 
 - **Every Console API endpoint refuses calls from other origins using `isCrossOrigin()`** (ticket 01). Reuse it on every new endpoint, including the Canvas platform services in ticket 11.
