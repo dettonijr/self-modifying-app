@@ -4,6 +4,8 @@
 // script, it lives outside the Canvas repo, so Claude can't edit it.
 
 const BASE = "/__platform";
+// Filled in by the Canvas server from src/canvas-versions.ts.
+const { PINNED_PATH, VERSION_MARKER, VIEW_ONLY_HEADER } = __PLATFORM_VERSIONS__;
 const FEATURE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 function checkFeature(feature) {
@@ -15,8 +17,10 @@ function checkFeature(feature) {
 
 // A pinned view of an older version (`/@<commit>/…?version`) is read-only: it
 // sees live data and messages, but writes and sends are quietly dropped, so
-// old code carries on as if they worked. The Canvas server refuses them too.
-const viewOnly = /^\/@[0-9a-f]{40}\//.test(location.pathname) && new URLSearchParams(location.search).has("version");
+// old code carries on as if they worked. The Canvas server refuses them too,
+// and also those of a normal tab still on an older commit, about to catch up:
+// that refusal is dropped quietly the same way (see `call`).
+const viewOnly = PINNED_PATH.test(location.pathname) && new URLSearchParams(location.search).has(VERSION_MARKER);
 
 // One event stream per page, shared with the platform script when it's there.
 let events;
@@ -31,6 +35,7 @@ async function call(method, path, body) {
     headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  if (response.status === 403 && response.headers.has(VIEW_ONLY_HEADER)) return response;
   if (!response.ok && response.status !== 404) {
     throw new Error(`Platform service ${method} ${path} failed (${response.status}): ${await response.text()}`);
   }
@@ -80,12 +85,14 @@ export function store(feature) {
       return response.status === 404 ? undefined : (await response.json()).value;
     },
     async set(key, value) {
+      // Checked before the view-only drop, so a bad key or value throws on every version alike: a bug never hides behind the drop.
       const path = keyPath(key);
       if (value === undefined) throw new TypeError("Use delete() to remove a key");
       if (viewOnly) return;
       await call("PUT", path, { value });
     },
     async delete(key) {
+      // Checked before the view-only drop, as in `set`.
       const path = keyPath(key);
       if (viewOnly) return;
       await call("DELETE", path);

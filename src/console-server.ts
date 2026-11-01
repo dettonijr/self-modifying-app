@@ -6,6 +6,7 @@ import type { CanvasRepository } from "./canvas-repository.ts";
 import { changedFilesOf } from "./changed-files.ts";
 import { isCrossOrigin, readJson, sendJson } from "./http.ts";
 import { ChangeRefused, type Runs, type RunView } from "./runs.ts";
+import { pinnedViewPath } from "./canvas-versions.ts";
 
 const CONSOLE_PAGE = readFileSync(new URL("./console-page.html", import.meta.url), "utf8");
 const RUN_PAGE = readFileSync(new URL("./run-page.html", import.meta.url), "utf8");
@@ -81,7 +82,8 @@ export function createConsoleServer(options: { runs: Runs; repo: CanvasRepositor
       }
       if (url.pathname === "/api/canvas" && req.method === "GET") {
         // The Canvas is on the same host as the Console, on its own port (docs/adr/0004).
-        return sendJson(res, 200, { port: canvasPort() });
+        // `versionPath` is the view-only address of a commit, with `{commit}` to fill in.
+        return sendJson(res, 200, { port: canvasPort(), versionPath: pinnedViewPath("{commit}") });
       }
       res.writeHead(404).end("Not found");
     } catch (error) {

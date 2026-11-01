@@ -173,6 +173,30 @@ describe("Older Canvas versions in the browser", () => {
     expect(await pinned.getByText("heard: from ?version").count()).toBe(0);
   });
 
+  it("quietly drops the writes and sends of a normal tab still on an older version, as it's about to catch up", async () => {
+    const { platform, agent } = await start();
+    agent.enqueue(async (run) => {
+      await run.writeFile("index.html", NOTES_PAGE);
+      await run.writeFile("features/notes/notes.js", NOTES_FEATURE);
+    });
+    const withNotes = (await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "add notes" })).id)).commit;
+    agent.enqueue((run) => run.writeFile("features/notes/extra.txt", "later"));
+    await platform.waitForRun((await platform.sendPrompt({ nickname: "Bob", prompt: "later change" })).id);
+    await putValue(platform, "/__platform/store/notes/note", "kept");
+
+    const stale = await browser.newPage();
+    // Without the platform's hello, the tab stays on its older commit instead of reloading.
+    await stale.route("**/__platform/events", (route) => route.abort());
+    await stale.goto(`${platform.canvasUrl}/@${withNotes}/`);
+    await stale.locator("#notes[data-ready=yes]").waitFor();
+
+    await stale.getByRole("button", { name: "Write" }).click();
+    await stale.getByText(/^(wrote|error)/).waitFor();
+    expect(await stale.getByText(/^error/).count()).toBe(0);
+    expect(await (await platform.fetchCanvas("/__platform/store/notes/note")).json()).toEqual({ value: "kept" });
+    expect((await platform.fetchCanvas("/__platform/store/notes/other")).status).toBe(404);
+  });
+
   it("doesn't show the banner on the live Canvas", async () => {
     const { platform } = await start();
     const page = await liveTab(platform);

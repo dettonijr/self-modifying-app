@@ -3,9 +3,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { CanvasChannel } from "./canvas-channel.ts";
 import { isCrossOrigin, readJson, sendJson } from "./http.ts";
 import type { KeyValueStore } from "./key-value-store.ts";
+import { VIEW_ONLY_HEADER, withVersionDefinitions } from "./canvas-versions.ts";
 
 /** The client library Canvas features import from `/__platform/services.js`. */
-export const SERVICES_LIBRARY = readFileSync(new URL("./canvas-services.js", import.meta.url), "utf8");
+export const SERVICES_LIBRARY = withVersionDefinitions(readFileSync(new URL("./canvas-services.js", import.meta.url), "utf8"));
 /** Must match the client library's rule, which mirrors feature folder names. */
 const FEATURE_NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const MAX_MESSAGE_BYTES = 16 * 1024;
@@ -20,7 +21,8 @@ const MAX_KEY_LENGTH = 256;
  *   `{entries: [{key, value}]}`.
  *
  * Changes (anything but `GET`/`HEAD`) are refused with 403 when `isViewOnly`
- * says the request comes from a view-only page, such as an older version.
+ * says the request comes from a view-only page, such as an older version,
+ * marked with `VIEW_ONLY_HEADER` so the services library drops them quietly.
  *
  * Returns false if `servicePath` isn't a services path.
  */
@@ -38,7 +40,7 @@ export async function handleServiceRequest(
   }
   if (req.method !== "GET" && req.method !== "HEAD" && (await services.isViewOnly?.(req))) {
     console.warn(`Refused ${req.method} ${req.url} from an older Canvas version (${req.headers.referer})`);
-    res.writeHead(403).end("Older Canvas versions are view only");
+    res.writeHead(403, { [VIEW_ONLY_HEADER]: "1" }).end("Older Canvas versions are view only");
     return true;
   }
   const feature = match[1] ?? match[2];

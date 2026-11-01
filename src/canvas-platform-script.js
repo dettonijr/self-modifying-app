@@ -7,9 +7,10 @@
 (() => {
   const NOTICE_KEY = "__platform.notice";
   const NOTICE_MS = 6000;
-  const pinned = /^\/@([0-9a-f]{40})(\/.*)$/.exec(location.pathname);
+  // Filled in by the Canvas server from src/canvas-versions.ts.
+  const { PINNED_PATH, VERSION_MARKER } = __PLATFORM_VERSIONS__;
+  const pinned = PINNED_PATH.exec(location.pathname);
   const pageCommit = pinned?.[1];
-  const VERSION_MARKER = "version";
   const viewOnly = pageCommit !== undefined && new URLSearchParams(location.search).has(VERSION_MARKER);
   // The page's live URL, which the Canvas server redirects to the newest commit.
   const liveUrl = () => (pinned ? pinned[2] : location.pathname) + location.search + location.hash;

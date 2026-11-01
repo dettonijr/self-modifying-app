@@ -6,17 +6,14 @@ import type { CanvasRepository } from "./canvas-repository.ts";
 import type { KeyValueStore } from "./key-value-store.ts";
 import { contentType } from "./http.ts";
 import { handleServiceRequest, SERVICES_LIBRARY } from "./platform-services.ts";
+import { PINNED_PATH, VERSION_MARKER, withVersionDefinitions } from "./canvas-versions.ts";
 
 /** URL paths under this prefix belong to the platform; Canvas files there are never served. */
 const PLATFORM_PREFIX = "/__platform/";
-const PLATFORM_SCRIPT = readFileSync(new URL("./canvas-platform-script.js", import.meta.url), "utf8");
+const PLATFORM_SCRIPT = withVersionDefinitions(readFileSync(new URL("./canvas-platform-script.js", import.meta.url), "utf8"));
 // The platform's palette, shared with the Console, for the banner and notice.
 const PALETTE = readFileSync(new URL("./palette.css", import.meta.url), "utf8");
 const PLATFORM_SCRIPT_TAG = `<script src="${PLATFORM_PREFIX}platform.js"></script>`;
-/** `/@<commit>/<path>`: a file as it is at one commit. */
-const PINNED_PATH = /^\/@([0-9a-f]{40})(\/.*)$/;
-/** The query parameter marking a pinned, view-only page, as in `/@<commit>/?version`. */
-const VERSION_MARKER = "version";
 
 /**
  * Serves the Canvas from git. A page's live URL redirects to the same page at

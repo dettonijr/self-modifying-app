@@ -290,14 +290,14 @@
       return span(`line ${kind}`, text);
     }
 
-    let canvasPort;
+    let canvas;
     /** Shows the link to the Canvas's commit-pinned URL for `commit`, or hides it if there's none. */
     async function showCanvasVersion(commit) {
       const paragraph = $("canvas-version");
       if (commit === undefined) return void (paragraph.hidden = true);
-      canvasPort ??= await fetch("/api/canvas").then((response) => (response.ok ? response.json() : undefined)).then((canvas) => canvas?.port);
-      if (canvasPort === undefined) return;
-      paragraph.querySelector("a").href = `${location.protocol}//${location.hostname}:${canvasPort}/@${commit}/?version`;
+      canvas ??= await fetch("/api/canvas").then((response) => (response.ok ? response.json() : undefined));
+      if (canvas === undefined) return;
+      paragraph.querySelector("a").href = `${location.protocol}//${location.hostname}:${canvas.port}${canvas.versionPath.replace("{commit}", commit)}`;
       paragraph.hidden = false;
     }
 
