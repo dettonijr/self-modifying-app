@@ -15,7 +15,7 @@ See `DECISIONS.md` ("Canvas serving and live reload", "Platform services", "Run 
 
 **Blocked by:** 01 (done first at the user's request)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] Opening "View the Canvas at this version" shows that version and it stays there after the platform's `hello` and after a new Land (Playwright, waiting past both)
 - [ ] A normal tab at an old commit still catches up to the live Canvas

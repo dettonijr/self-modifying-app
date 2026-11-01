@@ -15,7 +15,7 @@ See `DECISIONS.md` ("Run log", "The real Claude Agent", "Look and feel").
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [ ] The real Claude Agent requests summarized thinking and emits each summary as a `thinking` entry; redacted/empty thinking is skipped (unit-tested on its message conversion)
 - [ ] Each tool call is one `tool` entry with tool name and worktree-relative target, never its output (unit-tested for Read, Write, Edit, Glob, Grep)
