@@ -66,6 +66,13 @@ async function canUse(options: Options, tool: string, input: Record<string, unkn
   return options.canUseTool!(tool, input, { signal: new AbortController().signal, toolUseID: "t1" } as Parameters<NonNullable<Options["canUseTool"]>>[2]);
 }
 
+/** Plays Claude Code asking the Agent's `PreToolUse` hook about a tool call. */
+async function preToolUse(options: Options, tool: string, input: Record<string, unknown>, toolUseID = "t1") {
+  const [matcher] = options.hooks?.PreToolUse ?? [];
+  const hookInput = { hook_event_name: "PreToolUse", tool_name: tool, tool_input: input, tool_use_id: toolUseID, session_id: "s", transcript_path: "", cwd: "" };
+  return matcher.hooks[0](hookInput as never, toolUseID, { signal: new AbortController().signal });
+}
+
 describe("The Claude Agent", () => {
   it("asks Claude to work in the worktree with the chosen model, the Prompt and the Canvas conventions", async () => {
     const worktree = await tempWorktree();
@@ -279,6 +286,42 @@ describe("The Claude Agent", () => {
       { type: "tool", text: "Refused: Write relative.js (not an absolute path)" },
       { type: "tool", text: "Refused: Bash (not available)" },
     ]);
+  });
+
+  it("applies the same confinement in a PreToolUse hook, which Claude Code runs even for calls it allows by itself", async () => {
+    const worktree = await tempWorktree();
+    const { query, calls } = fakeQuery(async function* () {
+      yield success();
+    });
+    await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+    const { options } = calls[0];
+
+    expect(await preToolUse(options, "Read", { file_path: path.join(worktree, "index.html") })).toEqual({});
+    expect(await preToolUse(options, "Glob", { pattern: "**/*.js" })).toEqual({});
+    for (const [tool, input] of [
+      ["Read", { file_path: path.join(worktree, ".git/config") }],
+      ["Grep", { pattern: "x", path: path.join(worktree, ".git") }],
+      ["Read", { file_path: "/etc/passwd" }],
+      ["Read", { file_path: "relative.js" }],
+      ["Bash", { command: "ls" }],
+    ] as const) {
+      expect(await preToolUse(options, tool, input)).toMatchObject({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny" } });
+    }
+  });
+
+  it("reports a tool call refused by the PreToolUse hook with the reason", async () => {
+    const worktree = await tempWorktree();
+    const { query } = fakeQuery(async function* ({ options }) {
+      const input = { file_path: path.join(worktree, ".git/config") };
+      yield assistant("m1", [{ type: "tool_use", id: "t1", name: "Read", input }]);
+      await preToolUse(options, "Read", input, "t1");
+      yield toolResult("t1", "Only files inside the working directory can be used", true);
+      yield success();
+    });
+
+    const events = await collect(agentWith(query).run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+
+    expect(events.filter((e) => e.type === "tool")).toEqual([{ type: "tool", text: "Refused: Read .git/config (inside the Canvas's history)" }]);
   });
 
   it("still reports a tool call that never got a result before the Run ended", async () => {
