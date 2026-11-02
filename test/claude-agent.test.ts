@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import type { Options, PermissionResult, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../src/agent.ts";
-import { agentFromEnvironment, ClaudeAgent, type ClaudeQuery } from "../src/claude-agent.ts";
+import { agentFromEnvironment, ClaudeAgent, credentialFromEnvironment, type ClaudeQuery } from "../src/claude-agent.ts";
 import { startTestPlatform, type TestPlatform } from "./support/harness.ts";
 
 /**
@@ -59,7 +59,7 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
 }
 
 function agentWith(query: ClaudeQuery, limits: { timeLimitMs?: number; tokenLimit?: number } = {}) {
-  return new ClaudeAgent({ apiKey: "sk-test-key", timeLimitMs: limits.timeLimitMs ?? 60_000, tokenLimit: limits.tokenLimit ?? 1_000_000, query });
+  return new ClaudeAgent({ credential: { kind: "apiKey", value: "sk-test-key" }, timeLimitMs: limits.timeLimitMs ?? 60_000, tokenLimit: limits.tokenLimit ?? 1_000_000, query });
 }
 
 async function canUse(options: Options, tool: string, input: Record<string, unknown>): Promise<PermissionResult | null> {
@@ -164,6 +164,25 @@ describe("The Claude Agent", () => {
     expect(calls[0].options.env?.ANTHROPIC_API_KEY).toBe("sk-test-key");
     expect(calls[0].prompt).not.toContain("sk-test-key");
     expect(JSON.stringify(calls[0].options.systemPrompt)).not.toContain("sk-test-key");
+  });
+
+  it("hands Claude's process only the chosen credential", async () => {
+    const worktree = await tempWorktree();
+    const { query, calls } = fakeQuery(async function* () {
+      yield success();
+    });
+    const agent = new ClaudeAgent({ credential: { kind: "oauthToken", value: "oat-test-token" }, timeLimitMs: 60_000, tokenLimit: 1_000_000, query });
+    const before = { ...process.env };
+    process.env.ANTHROPIC_API_KEY = "sk-stray-key";
+    try {
+      await collect(agent.run({ worktree, instructions: "x", model: "claude-sonnet-5-5" }));
+    } finally {
+      process.env = before;
+    }
+
+    expect(calls[0].options.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("oat-test-token");
+    expect(calls[0].options.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(calls[0].prompt).not.toContain("oat-test-token");
   });
 
   it("reports files being edited, token usage and success", async () => {
@@ -484,7 +503,19 @@ describe("Choosing the Agent from the environment", () => {
     expect(() => agentFromEnvironment({ ANTHROPIC_API_KEY: "k", RUN_TOKEN_LIMIT: "lots" })).toThrow(/RUN_TOKEN_LIMIT/);
   });
 
-  it("fails every Run without an API key", async () => {
+  it("uses Claude with a subscription token when there's no API key, and prefers the API key when both are set", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(credentialFromEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: "oat-test-token" })).toEqual({ kind: "oauthToken", value: "oat-test-token" });
+      expect(agentFromEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: "oat-test-token" })).toBeInstanceOf(ClaudeAgent);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/subscription token/));
+      expect(credentialFromEnvironment({ ANTHROPIC_API_KEY: "sk-test-key", CLAUDE_CODE_OAUTH_TOKEN: "oat-test-token" })).toEqual({ kind: "apiKey", value: "sk-test-key" });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("fails every Run without an API key or subscription token", async () => {
     const agent = agentFromEnvironment({});
     expect(agent).not.toBeInstanceOf(ClaudeAgent);
     expect((await collect(agent.run({ worktree: "/nowhere", instructions: "x", model: "claude-sonnet-5-5" }))).at(-1)).toMatchObject({ outcome: "failure" });

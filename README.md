@@ -19,6 +19,8 @@ Both listen on all interfaces, so other devices on the network can join. Set `CO
 
 Claude needs the host's Anthropic API key in `ANTHROPIC_API_KEY` (in the environment or an `.env` file next to `docker-compose.yml`). Without it every Run fails. The key is only handed to Claude's own process; it never goes into the Canvas or the Console. Each Run is stopped and rejected after `RUN_TIME_LIMIT_SECONDS` (default 600) or `RUN_TOKEN_LIMIT` tokens (default 2,000,000, counting fresh input, cache reads, cache writes and output). There's no game-wide spending cap: these per-Run limits are the safety net. Up to `MAX_PARALLEL_RUNS` Runs (default 3) work at once to start with; further Prompts wait in the queue. Lowering the limit is the first thing to try if parallel Runs conflict too often. To change it while the platform runs:
 
+For internal testing only, Claude can sign in with a Claude subscription instead: put a token from `claude setup-token` in `CLAUDE_CODE_OAUTH_TOKEN` (environment or `.env`). An API key wins if both are set, and the platform warns at startup. Anthropic doesn't allow claude.ai login for products built on the Agent SDK, and every Player's Prompts use that subscription, so don't run the game for others this way. The cost shown per Run is then only an estimate of what the API would have charged.
+
 ```sh
 docker compose exec platform npm run set-parallel-runs -- 2
 ```

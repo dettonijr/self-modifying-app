@@ -9,6 +9,8 @@ services:
       - CANVAS_PUBLIC_PORT=${CANVAS_PORT:-3001}
       # Read from the host's environment or an `.env` file; never put the key in the Canvas.
       - ANTHROPIC_API_KEY
+      # Internal testing only, instead of the key: a Claude subscription token from `claude setup-token`.
+      - CLAUDE_CODE_OAUTH_TOKEN
       - RUN_TIME_LIMIT_SECONDS
       - RUN_TOKEN_LIMIT
       - MAX_PARALLEL_RUNS

@@ -33,7 +33,7 @@ async function gitWorktree(): Promise<string> {
 
 function agentAgainst(api: FakeAnthropicApi): ClaudeAgent {
   return new ClaudeAgent({
-    apiKey: "sk-ant-fake",
+    credential: { kind: "apiKey", value: "sk-ant-fake" },
     timeLimitMs: 60_000,
     tokenLimit: 1_000_000,
     query: ({ prompt, options }) =>

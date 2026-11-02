@@ -7,9 +7,19 @@ import { positiveNumberFromEnvironment } from "./environment.ts";
 /** The one call into the Claude Agent SDK; tests substitute a scripted stream. */
 export type ClaudeQuery = (params: { prompt: string; options: Options }) => AsyncIterable<SDKMessage>;
 
+/**
+ * How Claude's process signs in: the host's Anthropic API key, or a Claude
+ * subscription token from `claude setup-token` (for internal testing only:
+ * Anthropic doesn't allow claude.ai login for products built on the Agent SDK).
+ */
+export type ClaudeCredential = { kind: "apiKey"; value: string } | { kind: "oauthToken"; value: string };
+
+/** The environment variable Claude's process reads each kind of credential from. */
+const CREDENTIAL_VARIABLES = { apiKey: "ANTHROPIC_API_KEY", oauthToken: "CLAUDE_CODE_OAUTH_TOKEN" } as const;
+
 export interface ClaudeAgentOptions {
-  /** The host's Anthropic API key. Only ever handed to Claude's own process. */
-  apiKey: string;
+  /** Only ever handed to Claude's own process. */
+  credential: ClaudeCredential;
   /** A Run still working after this long is stopped and fails. */
   timeLimitMs: number;
   /** A Run that uses more tokens than this (fresh input, cache reads, cache writes and output) is stopped and fails. */
@@ -125,12 +135,13 @@ export class ClaudeAgent implements Agent {
       mcpServers: {},
       strictMcpConfig: true,
       systemPrompt: { type: "preset", preset: "claude_code", append: `${PLATFORM_RULES}\n\n${conventions}` },
-      env: { ...process.env, ANTHROPIC_API_KEY: this.options.apiKey },
+      env: claudeEnvironment(process.env, this.options.credential),
     };
   }
 
   private redact(text: string): string {
-    return this.options.apiKey ? text.split(this.options.apiKey).join("[redacted]") : text;
+    const secret = this.options.credential.value;
+    return secret ? text.split(secret).join("[redacted]") : text;
   }
 }
 
@@ -138,15 +149,34 @@ export const DEFAULT_TIME_LIMIT_SECONDS = 600;
 export const DEFAULT_TOKEN_LIMIT = 2_000_000;
 
 /**
- * The Agent the running platform uses: Claude when `ANTHROPIC_API_KEY` is set,
- * otherwise one that fails every Run. Caps come from `RUN_TIME_LIMIT_SECONDS`
- * and `RUN_TOKEN_LIMIT`.
+ * Claude's process environment: the platform's, with exactly one credential,
+ * so a stray second one can't override the chosen one.
+ */
+function claudeEnvironment(env: NodeJS.ProcessEnv, credential: ClaudeCredential): NodeJS.ProcessEnv {
+  const { ANTHROPIC_API_KEY: _apiKey, CLAUDE_CODE_OAUTH_TOKEN: _oauthToken, ...rest } = env;
+  return { ...rest, [CREDENTIAL_VARIABLES[credential.kind]]: credential.value };
+}
+
+/** The credential from the environment: `ANTHROPIC_API_KEY` wins over `CLAUDE_CODE_OAUTH_TOKEN`. */
+export function credentialFromEnvironment(env: NodeJS.ProcessEnv): ClaudeCredential | undefined {
+  if (env.ANTHROPIC_API_KEY) return { kind: "apiKey", value: env.ANTHROPIC_API_KEY };
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) return { kind: "oauthToken", value: env.CLAUDE_CODE_OAUTH_TOKEN };
+  return undefined;
+}
+
+/**
+ * The Agent the running platform uses: Claude when `ANTHROPIC_API_KEY` or
+ * `CLAUDE_CODE_OAUTH_TOKEN` is set, otherwise one that fails every Run. Caps
+ * come from `RUN_TIME_LIMIT_SECONDS` and `RUN_TOKEN_LIMIT`.
  */
 export function agentFromEnvironment(env: NodeJS.ProcessEnv): Agent {
-  const apiKey = env.ANTHROPIC_API_KEY;
-  if (!apiKey) return unavailableAgent;
+  const credential = credentialFromEnvironment(env);
+  if (!credential) return unavailableAgent;
+  if (credential.kind === "oauthToken") {
+    console.warn("Claude signs in with a subscription token (CLAUDE_CODE_OAUTH_TOKEN). For internal testing only: every Player's Prompts use that subscription.");
+  }
   return new ClaudeAgent({
-    apiKey,
+    credential,
     timeLimitMs: positiveNumberFromEnvironment(env, "RUN_TIME_LIMIT_SECONDS", DEFAULT_TIME_LIMIT_SECONDS) * 1000,
     tokenLimit: positiveNumberFromEnvironment(env, "RUN_TOKEN_LIMIT", DEFAULT_TOKEN_LIMIT),
   });
