@@ -6,6 +6,19 @@ Created in [T3 Code](https://t3.codes).
 
 A game where anyone on the local network sends Prompts and Claude rewrites a website, the Canvas, in response. See `GLOSSARY.md` for the vocabulary and `docs/adr/` for the main decisions.
 
+## Quick start
+
+You need git, Docker with Compose, and the Claude Code CLI (`claude`).
+
+```sh
+git clone git@github.com:dettonijr/self-modifying-app.git
+cd self-modifying-app
+echo "CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token | tee /dev/stderr | grep -o 'sk-ant-oat01-[A-Za-z0-9_-]*')" >> .env
+docker compose up --build
+```
+
+Then open the Console at `http://<host-ip>:3000` and the Canvas at `http://<host-ip>:3001`. The subscription token is for internal testing only; to run the game for others, put `ANTHROPIC_API_KEY=<key>` in `.env` instead (see below).
+
 ## Running it
 
 ```sh
